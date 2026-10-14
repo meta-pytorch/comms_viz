@@ -1,0 +1,24 @@
+---
+source: crates/comms-viz-cli/tests/integration/analysis.rs
+expression: "harness::merged_trace_summary(&out_dir.join(\"tree/local-run/traces/000000.merged.pt.trace.json.gz\"))"
+---
+top-level keys: displayTimeUnit, distributedInfo, schemaVersion, traceEvents, traceName
+schemaVersion = 1
+distributedInfo = {"pg_config":[{"backend_config":"cuda:nccl","pg_desc":"mesh_dp_shard","pg_name":"1","pg_size":4,"ranks":[0,1,2,3]},{"backend_config":"cuda:nccl","pg_desc":"mesh_tp","pg_name":"2","pg_size":4,"ranks":[0,1,2,3]},{"backend_config":"cuda:nccl","pg_desc":"mesh_cp","pg_name":"3","pg_size":4,"ranks":[0,1,2,3]},{"backend_config":"cuda:nccl","pg_desc":"mesh_ep","pg_name":"4","pg_size":4,"ranks":[0,1,2,3]},{"backend_config":"cuda:nccl","pg_desc":"mesh_dp_replicate","pg_name":"5","pg_size":4,"ranks":[0,1,2,3]},{"backend_config":"cuda:nccl","pg_desc":"default_pg","pg_name":"0","pg_size":4,"ranks":[0,1,2,3]}],"rank":0,"world_size":4}
+traceName = "/tmp/rank0.json"
+displayTimeUnit = "ms"
+traceEvents: 1518
+events by ph:
+  M: 4
+  X: 1323
+  f: 80
+  i: 31
+  s: 80
+events by cat:
+  (none): 4
+  ac2g: 160
+  cpu_op: 400
+  cuda_runtime: 400
+  gpu_user_annotation: 37
+  kernel: 462
+  user_annotation: 55

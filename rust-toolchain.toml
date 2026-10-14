@@ -1,0 +1,6 @@
+# Minimum driven by the dependency tree: polars 0.55 → sysinfo 0.39 wants
+# rustc ≥1.95. Pinning an exact version (rather than floating `stable`) means
+# every host builds with the same compiler; rustup auto-installs it on first
+# use.
+[toolchain]
+channel = "1.97.1"

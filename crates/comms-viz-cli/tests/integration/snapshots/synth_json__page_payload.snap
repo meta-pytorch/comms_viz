@@ -1,0 +1,327 @@
+---
+source: crates/comms-viz-cli/tests/integration/page.rs
+expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
+---
+{
+  "artifact_index": {},
+  "bd_preview": null,
+  "breakdown": {
+    "t": "plain",
+    "v": "all_gather_total,all_reduce_total,all_to_all_total,comm_total,comp_total,cp_all_gather_total,cp_all_reduce_total,cp_all_to_all_total,cp_reduce_scatter_total,cudaEventSynchronize_total,cudaHostAlloc_total,cudaLaunchKernel_total,cudaStreamSynchronize_total,default_pg_all_gather_total,default_pg_all_reduce_total,default_pg_all_to_all_total,default_pg_reduce_scatter_total,dp_replicate_all_gather_total,dp_replicate_all_reduce_total,dp_replicate_all_to_all_total,dp_replicate_reduce_scatter_total,dp_shard_all_gather_total,dp_shard_all_reduce_total,dp_shard_all_to_all_total,dp_shard_reduce_scatter_total,ep_all_gather_total,ep_all_reduce_total,ep_all_to_all_total,ep_reduce_scatter_total,rank,reduce_scatter_total,total_duration,tp_all_gather_total,tp_all_reduce_total,tp_all_to_all_total,tp_reduce_scatter_total\n10372.0,14794.0,0.0,36296.0,30265.0,1989.0,1855.0,0.0,2055.0,373.0,423.0,374.0,471.0,1800.0,3245.0,0.0,822.0,2316.0,2539.0,0.0,1153.0,1506.0,3880.0,0.0,741.0,1144.0,1417.0,0.0,3545.0,0,11130.0,9313.0,1617.0,1858.0,0.0,2814.0\n12626.0,11195.0,0.0,38513.0,30149.0,1684.0,768.0,0.0,4217.0,377.0,544.0,404.0,435.0,1985.0,2093.0,0.0,2792.0,1423.0,1834.0,0.0,3323.0,1777.0,2799.0,0.0,1482.0,2403.0,2031.0,0.0,1319.0,1,14692.0,8971.0,3354.0,1670.0,0.0,1559.0\n9065.0,13232.0,0.0,37049.0,29620.0,862.0,1934.0,0.0,3153.0,427.0,408.0,493.0,462.0,1784.0,1858.0,0.0,2298.0,1059.0,2580.0,0.0,2645.0,2270.0,2449.0,0.0,1937.0,1032.0,1646.0,0.0,2617.0,2,14752.0,9347.0,2058.0,2765.0,0.0,2102.0\n11929.0,11070.0,0.0,35874.0,30483.0,1593.0,2516.0,0.0,2706.0,354.0,406.0,544.0,371.0,1908.0,2341.0,0.0,1802.0,2182.0,1479.0,0.0,1467.0,2197.0,1843.0,0.0,2557.0,1621.0,1982.0,0.0,2357.0,3,12875.0,9303.0,2428.0,909.0,0.0,1986.0\n11617.0,14718.0,0.0,36724.0,30194.0,2280.0,1800.0,0.0,1526.0,505.0,460.0,371.0,502.0,571.0,2491.0,0.0,1996.0,2903.0,937.0,0.0,2186.0,2176.0,3553.0,0.0,1350.0,2540.0,1843.0,0.0,1573.0,4,10389.0,9330.0,1147.0,4094.0,0.0,1758.0\n12524.0,14596.0,0.0,39202.0,30595.0,2573.0,2725.0,0.0,1425.0,393.0,510.0,428.0,450.0,2167.0,2228.0,0.0,2014.0,2034.0,2145.0,0.0,1619.0,1241.0,2127.0,0.0,3425.0,2466.0,2925.0,0.0,2356.0,5,12082.0,9009.0,2043.0,2446.0,0.0,1243.0\n13190.0,9805.0,0.0,35647.0,28201.0,3505.0,949.0,0.0,2117.0,484.0,446.0,422.0,439.0,2190.0,1400.0,0.0,3434.0,2720.0,1342.0,0.0,1256.0,1189.0,2293.0,0.0,2348.0,2261.0,2351.0,0.0,1814.0,6,12652.0,9079.0,1325.0,1470.0,0.0,1683.0\n13224.0,12734.0,0.0,37071.0,30448.0,2994.0,1461.0,0.0,2099.0,556.0,464.0,398.0,397.0,684.0,2511.0,0.0,2496.0,2851.0,1956.0,0.0,1064.0,1607.0,1737.0,0.0,1912.0,3460.0,2642.0,0.0,915.0,7,11113.0,8833.0,1628.0,2427.0,0.0,2627.0\n"
+  },
+  "config": {
+    "engine": {
+      "name": "comms_viz",
+      "rev": "[GIT_REV]",
+      "version": "0.1.0"
+    },
+    "result_dir": "mks_results",
+    "run_id": "local-run",
+    "trace_root": "/fixtures/synth/step_000000000106",
+    "worker_count": 8,
+    "world_size": 8
+  },
+  "data_name": "comms_viz-local-run-step_106.pgdata",
+  "data_shards": null,
+  "default_group": "cp_3",
+  "flat_1010": {
+    "analyzer_id": 1010,
+    "host_map_pending": true,
+    "name": "LLMTopologyAnalyzer",
+    "pg_axes": {
+      "cp": 8,
+      "default_pg": 8,
+      "dp_replicate": 8,
+      "dp_shard": 8,
+      "ep": 8,
+      "tp": 8
+    },
+    "world_size": 8
+  },
+  "generated_at_s": "[TS]",
+  "metadata": {
+    "capture": {
+      "clock_origin_unit": "ns",
+      "id": "[\"\",\"/fixtures/synth/step_000000000106\",\"local-run\"]",
+      "pg_scope": [
+        "capture.id",
+        "replica_id",
+        "pg_id"
+      ],
+      "rank_clock_origins_ns": {
+        "0": null,
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null,
+        "5": null,
+        "6": null,
+        "7": null
+      },
+      "run_id": "local-run",
+      "run_name": "",
+      "step": 106,
+      "timestamp_unit": "us",
+      "trace_root": "/fixtures/synth/step_000000000106"
+    },
+    "config": {
+      "run_name": "",
+      "trace_folder_path": "/fixtures/synth/step_000000000106",
+      "world_size": 8
+    },
+    "pg_info": {
+      "groups": {
+        "cp": {
+          "alias": "cp",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_cp"
+          ],
+          "pg_sizes": [
+            8
+          ],
+          "size": 8
+        },
+        "default_pg": {
+          "alias": "default_pg",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "default_pg"
+          ],
+          "pg_sizes": [
+            8
+          ],
+          "size": 8
+        },
+        "dp_replicate": {
+          "alias": "dp_replicate",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_dp_replicate"
+          ],
+          "pg_sizes": [
+            8
+          ],
+          "size": 8
+        },
+        "dp_shard": {
+          "alias": "dp_shard",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_dp_shard"
+          ],
+          "pg_sizes": [
+            8
+          ],
+          "size": 8
+        },
+        "ep": {
+          "alias": "ep",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_ep"
+          ],
+          "pg_sizes": [
+            8
+          ],
+          "size": 8
+        },
+        "tp": {
+          "alias": "tp",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_tp"
+          ],
+          "pg_sizes": [
+            8
+          ],
+          "size": 8
+        }
+      },
+      "replica_size": null,
+      "shuffle_piggyback": null,
+      "valid_pgs": [
+        "cp",
+        "default_pg",
+        "dp_replicate",
+        "dp_shard",
+        "ep",
+        "tp"
+      ]
+    }
+  },
+  "per_pg": [
+    [
+      "cp_3",
+      "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"
+    ]
+  ],
+  "pg_base": 0,
+  "pg_index": [
+    [
+      "cp",
+      [
+        3,
+        3905
+      ]
+    ],
+    [
+      "default_pg",
+      [
+        0,
+        3855
+      ]
+    ],
+    [
+      "diagnostics",
+      [
+        0,
+        236
+      ]
+    ],
+    [
+      "dp_replicate",
+      [
+        5,
+        3902
+      ]
+    ],
+    [
+      "dp_shard",
+      [
+        1,
+        4083
+      ]
+    ],
+    [
+      "ep",
+      [
+        4,
+        3789
+      ]
+    ],
+    [
+      "tp",
+      [
+        2,
+        3998
+      ]
+    ]
+  ],
+  "pg_summary": [
+    {
+      "alias": "cp",
+      "count": 1,
+      "key": "cp",
+      "size": 8
+    },
+    {
+      "alias": "default_pg",
+      "count": 1,
+      "key": "default_pg",
+      "size": 8
+    },
+    {
+      "alias": "dp_replicate",
+      "count": 1,
+      "key": "dp_replicate",
+      "size": 8
+    },
+    {
+      "alias": "dp_shard",
+      "count": 1,
+      "key": "dp_shard",
+      "size": 8
+    },
+    {
+      "alias": "ep",
+      "count": 1,
+      "key": "ep",
+      "size": 8
+    },
+    {
+      "alias": "tp",
+      "count": 1,
+      "key": "tp",
+      "size": 8
+    }
+  ],
+  "rank_map": {
+    "t": "plain",
+    "v": "{\"hosts\":[],\"runs\":[[0,8,-1,0]],\"sfx\":[\".merged.pt.trace.json.gz\"],\"v\":1}"
+  },
+  "result_dir": "mks_results",
+  "run": {
+    "completed_at": 1700000001000000,
+    "error": null,
+    "run_id": "local-run",
+    "run_name": "",
+    "started_at": 1700000000000000,
+    "status": 4,
+    "total_ranks": 8
+  },
+  "run_id": "local-run",
+  "status": {
+    "elapsed_s": 1.0,
+    "phase": "completed",
+    "phases": {
+      "aggregation": {
+        "completed_at": 1700000001000000,
+        "duration_s": 0.0,
+        "started_at": 1700000001000000,
+        "status": "completed"
+      },
+      "assign": {
+        "completed_at": 1700000000000000,
+        "duration_s": 0.0,
+        "started_at": 1700000000000000,
+        "status": "completed"
+      },
+      "claim": {
+        "completed_at": 1700000000000000,
+        "duration_s": 0.0,
+        "started_at": 1700000000000000,
+        "status": "completed"
+      },
+      "processing": {
+        "completed_at": 1700000001000000,
+        "duration_s": 1.0,
+        "started_at": 1700000000000000,
+        "status": "completed"
+      }
+    },
+    "ranks": {
+      "processed": 8,
+      "total": 8
+    },
+    "run_id": "local-run",
+    "shard_count": 8,
+    "shards": {
+      "completed": 8,
+      "failed": 0,
+      "in_flight": 0,
+      "pending": 0
+    },
+    "version": 2,
+    "workers_active": 0,
+    "workers_done": 8
+  }
+}

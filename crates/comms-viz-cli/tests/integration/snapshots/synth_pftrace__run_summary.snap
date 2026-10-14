@@ -1,0 +1,5 @@
+---
+source: crates/comms-viz-cli/tests/integration/analysis.rs
+expression: "harness::run_summary(&run)"
+---
+comms_viz: world_size=8 processed=8 skipped=0 errors=0 pgs=[cp_3,default_pg_0,dp_replicate_5,dp_shard_1,ep_4,tp_2]

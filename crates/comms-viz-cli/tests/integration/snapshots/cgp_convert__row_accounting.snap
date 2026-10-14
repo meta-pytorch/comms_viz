@@ -1,0 +1,5 @@
+---
+source: crates/comms-viz-cli/tests/integration/convert_pftrace.rs
+expression: rows
+---
+comms_viz-convert: rows cpu=3200 gpu=1996 annotated=1596 | dropped flows=640 meta=8 other=124 string-track=96 | nest-violations=737 int-ts=5196

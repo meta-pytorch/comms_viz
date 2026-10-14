@@ -1,0 +1,78 @@
+[workspace]
+resolver = "2"
+members = ["crates/comms-viz-core", "crates/comms-viz-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "BSD-3-Clause"
+
+[workspace.dependencies]
+polars = { version = "0.55.2", features = [
+    "lazy",
+    "csv",
+    "parquet",
+    "strings",
+    "regex",
+    "is_in",
+    "cum_agg",
+    "replace",
+    "pivot",
+    "semi_anti_join",
+    "round_series",
+    "concat_str",
+    "streaming",
+    "timezones",
+    "performant",
+    "cse",
+    "dtype-full",
+] }
+# Same version as the `polars` facade (cargo unifies them into one build):
+# the parallel parquet row-group encode in emit.rs needs the facade-hidden
+# layers — chunk_df_for_writing / get_encodings / array_to_columns +
+# Compressor. default-features = false so these declarations only expose
+# what the facade already builds.
+polars-core = { version = "0.55.2", default-features = false }
+polars-io = { version = "0.55.2", default-features = false, features = ["parquet"] }
+polars-parquet = { version = "0.55.2", default-features = false, features = ["compression"] }
+anyhow = "1"
+# C zlib backend via a static vendored madler zlib: merged-trace .gz bytes
+# depend on the deflate implementation, and the comms_viz-vs-comms_viz determinism
+# suites (snapshots) want them stable across hosts — the
+# feature choice (static vendored zlib) is what carries that, plus the
+# lockfile for exact versions.
+flate2 = { version = "1", default-features = false, features = ["zlib"] }
+libz-sys = { version = "1", features = ["static"] }
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip + unbounded_depth + raw_value; NO preserve_order (Value
+# maps iterate/serialize in sorted key order — merged-trace key order and
+# walk iteration order follow it, so flipping the feature changes bytes).
+serde_json = { version = "1", features = ["float_roundtrip", "unbounded_depth", "raw_value"] }
+simd-json = "0.17"
+tempfile = "3"
+regex = "1"
+rayon = "1"
+clap = { version = "4", features = ["derive"] }
+crossbeam-channel = "0.5"
+tikv-jemallocator = "0.6"
+tikv-jemalloc-sys = "0.6"
+libdeflater = "1"
+
+[profile.release]
+lto = "thin"
+# 16 units + thin LTO instead of codegen-units=1: cross-CGU inlining is
+# recovered by the (parallel) thin-LTO backend, while cgu=1 serialized every
+# big crate's codegen on one thread (polars-core alone was 324s; clean build
+# averaged 5 of 224 cores busy). Verified vs a cgu=1 binary: byte-identical
+# artifacts on every fixture, runtime within noise.
+codegen-units = 16
+# No debug info: with debug=1 the binary was 833MB vs 108MB without.
+# Profiling wants target/perf.
+
+# Performance-measurement profile: identical codegen to release plus the
+# line tables perf/flamegraphs need to symbolicate. Same machine code, so
+# numbers measured here transfer to release.
+#   cargo build --profile perf   ->  target/perf/comms_viz
+[profile.perf]
+inherits = "release"
+debug = 1
