@@ -1083,14 +1083,19 @@ function placeTip(tt, e) {
   const y = below + h + 6 <= vh ? below : above;
   tt.style.top = Math.max(6, Math.min(y, vh - h - 6)) + "px";
 }
-// Table header with a hover (i) explaining how the column is computed.
-function infoTh(label, info, attrs = {}) {
+// A hover (i) explaining how a value is computed. Clicks stop here, so the
+// icon doesn't also sort a header or toggle a checkbox label it sits in.
+function infoMark(info) {
   let tt = document.getElementById("info-tt");
   if (!tt) { tt = el("div", { class: "tt infotip", id: "info-tt" }); document.body.append(tt); }
   const show = (e) => { tt.textContent = info; tt.style.display = "block"; placeTip(tt, e); };
-  const mark = el("span", { class: "info", onmouseenter: show, onmousemove: show,
-    onmouseleave: () => { tt.style.display = "none"; }, onclick: (e) => e.stopPropagation() }, "ⓘ");
-  return el("th", attrs, label, mark);
+  return el("span", { class: "info", onmouseenter: show, onmousemove: show,
+    onmouseleave: () => { tt.style.display = "none"; },
+    onclick: (e) => { e.preventDefault(); e.stopPropagation(); } }, "ⓘ");
+}
+// Table header with a hover (i) explaining how the column is computed.
+function infoTh(label, info, attrs = {}) {
+  return el("th", attrs, label, infoMark(info));
 }
 // w/s zoom (1.5x in / 0.67x out around the view center) and a/d pan (20% of
 // the visible span) on the active tab's chart.
@@ -1113,6 +1118,14 @@ document.addEventListener("keydown", (e) => {
   }
 });
 // --- breakdown ---------------------------------------------------------------
+// Hover explainers for the headline series; the rest are self-describing.
+const BD_INFO = {
+  total_duration: "Time between the first and last GPU event",
+  comm_total: "Total GPU time for recognized communication kernels, including wait time "
+    + "for other ranks, for both sync & async comms",
+  comp_total: "Total GPU time for non-comm kernels, excluding memcpy/memset",
+};
+const bdInfo = (c) => (BD_INFO[c] ? [infoMark(BD_INFO[c])] : []);
 const bd = {
   cats: [], enabled: new Set(), slotOf: new Map(),
   ranks: [], cols: {}, domain: null, sort: { col: "rank", dir: 1 }, page: 0,
@@ -1257,12 +1270,12 @@ const bd = {
       });
       const dot = el("span", { class: "sw",
         style: this.enabled.has(c) ? `background:${this.colorVar(c)}` : "border:1px solid var(--axis)" });
-      box.append(el("label", {}, cb, dot, c));
+      box.append(el("label", {}, cb, dot, c, ...bdInfo(c)));
     }
     const lg = document.getElementById("bd-legend");
     lg.textContent = "";
     for (const c of this.enabled) lg.append(el("span", { class: "it" },
-      el("span", { class: "sw", style: `background:${this.colorVar(c)}` }), c));
+      el("span", { class: "sw", style: `background:${this.colorVar(c)}` }), c, ...bdInfo(c)));
   },
   dom() {
     if (this.domain) return this.domain;
@@ -1430,7 +1443,8 @@ const bd = {
     const head = el("tr", {}, cols.map((c) => el("th", { onclick: () => {
       if (this.sort.col === c) this.sort.dir *= -1; else this.sort = { col: c, dir: 1 };
       this.renderTable();
-    } }, (c === "rank" ? "Rank" : c) + (this.sort.col === c ? (this.sort.dir > 0 ? " ▲" : " ▼") : ""))));
+    } }, (c === "rank" ? "Rank" : c) + (this.sort.col === c ? (this.sort.dir > 0 ? " ▲" : " ▼") : ""),
+      ...bdInfo(c))));
     const body = idx.slice(this.page * 100, this.page * 100 + 100).map((i) =>
       el("tr", {}, cols.map((c) => c === "rank"
         ? el("td", { class: "rlink", title: "Look this rank up in the PG calculator",
