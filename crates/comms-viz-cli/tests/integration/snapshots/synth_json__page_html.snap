@@ -282,7 +282,7 @@ details.node > summary { cursor: pointer; font-size: 12px; padding: 1px 0; }
         <div class="row" style="margin-top:8px">
           <button class="btn" id="bd-all">All</button>
           <button class="btn" id="bd-clear">Clear</button>
-          <span class="note">up to 8 series at once — the table always has every column</span>
+          <span class="note">series that are zero on every rank are left out — the table always has every column</span>
         </div>
         <div class="cats" id="bd-cats"></div>
         <div id="bd-table" style="display:none; margin-top:12px"></div>
@@ -1118,7 +1118,7 @@ document.addEventListener("keydown", (e) => {
 });
 // --- breakdown ---------------------------------------------------------------
 const bd = {
-  cats: [], enabled: new Set(), slotOf: new Map(), freeSlots: [...SLOTS.keys()],
+  cats: [], enabled: new Set(), slotOf: new Map(),
   ranks: [], cols: {}, domain: null, sort: { col: "rank", dir: 1 }, page: 0,
   full: false, wired: false,
   ML: 76, MR: 14, MT: 12, MB: 42,
@@ -1157,8 +1157,9 @@ const bd = {
     this.initData(csv);
     this.cats = cats || Object.keys(this.cols);
     this.full = !preview;
-    const defaults = ["comp_total", "comm_total"].filter((c) => this.cats.includes(c));
-    for (const c of defaults.length ? defaults : this.cats.slice(0, 2)) this.toggle(c, true);
+    const pickable = this.pickable();
+    const defaults = ["comp_total", "comm_total"].filter((c) => pickable.includes(c));
+    for (const c of defaults.length ? defaults : pickable.slice(0, 2)) this.toggle(c, true);
     this.renderCats();
     // Don't clobber a fetch-failure note that already landed (the boot
     // catch can beat the preview's async decode on offline copies).
@@ -1175,6 +1176,9 @@ const bd = {
     this.initData(csv);
     this.cats = Object.keys(this.cols);
     this.full = true;
+    // Drop series the preview offered that turn out to be zero on every rank.
+    const pickable = new Set(this.pickable());
+    for (const c of [...this.enabled]) if (!pickable.has(c)) this.toggle(c, false);
     this.note("");
     this.renderCats();
     this.draw();
@@ -1191,7 +1195,7 @@ const bd = {
       if (on) this.renderTable();
     });
     document.getElementById("bd-all").addEventListener("click", () => {
-      for (const c of this.cats) { if (this.enabled.size >= 8) break; this.toggle(c, true); }
+      for (const c of this.pickable()) this.toggle(c, true);
       this.renderCats(); this.draw();
     });
     document.getElementById("bd-clear").addEventListener("click", () => {
@@ -1216,30 +1220,43 @@ const bd = {
     cv.addEventListener("mouseleave", () => { document.getElementById("bd-tt").style.display = "none"; });
     addEventListener("resize", () => this.draw());
   },
-  // color follows the entity: a category keeps its slot while enabled;
-  // released slots go to newly enabled categories (max 8 concurrent).
+  // Series a run never produces (zero on every rank) aren't offered in the
+  // picker. A preview carries only the default series, so the rest stay
+  // listed until the full data shows whether they occur.
+  pickable() {
+    return this.cats.filter((c) => !this.cols[c] || this.cols[c].some((v) => v !== 0));
+  },
+  // color follows the entity: a category keeps its slot while enabled, and a
+  // newly enabled one takes the lowest free slot. Slots past the palette get
+  // hues spread around the wheel, so any number of series can be shown.
   toggle(cat, on) {
     if (on && !this.enabled.has(cat)) {
-      if (!this.freeSlots.length) return false;
-      this.slotOf.set(cat, this.freeSlots.shift());
+      const used = new Set(this.slotOf.values());
+      let slot = 0;
+      while (used.has(slot)) slot++;
+      this.slotOf.set(cat, slot);
       this.enabled.add(cat);
     } else if (!on && this.enabled.has(cat)) {
-      this.freeSlots.unshift(this.slotOf.get(cat));
-      this.freeSlots.sort((a, b) => a - b);
       this.slotOf.delete(cat); this.enabled.delete(cat);
     }
-    return true;
   },
-  color(cat) { return css(SLOTS[this.slotOf.get(cat)]); },
-  colorVar(cat) { return `var(${SLOTS[this.slotOf.get(cat)]})`; },
+  colorVar(cat) {
+    const slot = this.slotOf.get(cat);
+    if (slot < SLOTS.length) return `var(${SLOTS[slot]})`;
+    return `hsl(${Math.round(((slot - SLOTS.length) * 137.508 + 20) % 360)} 60% 50%)`;
+  },
+  color(cat) {
+    const slot = this.slotOf.get(cat);
+    return slot < SLOTS.length ? css(SLOTS[slot]) : this.colorVar(cat);
+  },
   renderCats() {
     const box = document.getElementById("bd-cats");
     box.textContent = "";
-    for (const c of this.cats) {
+    for (const c of this.pickable()) {
       const cb = el("input", { type: "checkbox" });
       cb.checked = this.enabled.has(c);
       cb.addEventListener("change", () => {
-        if (!this.toggle(c, cb.checked)) cb.checked = false;
+        this.toggle(c, cb.checked);
         this.renderCats(); this.draw();
       });
       const dot = el("span", { class: "sw",
