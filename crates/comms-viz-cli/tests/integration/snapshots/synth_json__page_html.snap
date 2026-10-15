@@ -782,12 +782,15 @@ function groupStem(PG, key, gid) {
   const candidates = [`${PG[key].alias || key}_${gid}`, `${key}_${gid}`];
   return candidates.find((candidate) => STEMS.has(candidate));
 }
+// Each group's lowest rank, for ordering the group picker; set with the labels.
+const STEM_FIRST_RANK = new Map();
 function installGroupLabels(PG) {
   const entries = [];
   for (const [key, group] of Object.entries(PG)) {
     group.groups.forEach((ranks, i) => {
       const stem = groupStem(PG, key, group.ids[i] ?? String(i));
       if (!stem) return;
+      STEM_FIRST_RANK.set(stem, Math.min(...ranks));
       const shown = ranks.slice(0, 8).join(", ");
       const more = ranks.length > 8 ? `, … +${loc(ranks.length - 8)}` : "";
       entries.push({ stem, base: `${prettyAxis(group.alias || key)} (r ${shown}${more})` });
@@ -807,6 +810,15 @@ function installGroupLabels(PG) {
 }
 const stemLabel = (s) => STEM_LABEL.get(s) ?? s;
 const labelStem = (l) => LABEL_STEM.get(l) ?? l;
+// Group picker order: axis, then lowest rank, then label, numbers compared as
+// numbers (tp_2 before tp_10) while the rank lists are still loading.
+const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+function compareGroups(a, b) {
+  const axis = (s) => stemLabel(s).replace(/ \(r .*$/, "");
+  return natural(axis(a), axis(b))
+    || (STEM_FIRST_RANK.get(a) ?? 0) - (STEM_FIRST_RANK.get(b) ?? 0)
+    || natural(stemLabel(a), stemLabel(b)) || natural(a, b);
+}
 // --- rank map ----------------------------------------------------------------
 let RANKMAP = [];  // [{rank, host, file}]
 let RANKBYID = new Map();  // rank -> RANKMAP row
@@ -1572,7 +1584,7 @@ const pl = {
   // the run), else just the embedded warm set (no-sidecar publishes).
   stems() {
     const stems = GROUPS.length ? GROUPS.map((g) => g.stem) : RAW.per_pg.map(([s]) => s);
-    return stems.filter((s) => s !== DIAG_STEM);
+    return stems.filter((s) => s !== DIAG_STEM).sort(compareGroups);
   },
   init() {
     const input = document.getElementById("pl-group");
