@@ -1907,6 +1907,14 @@ const pl = {
       r("End:", `${loc(hit.ts + hit.dur - this.minT)} μs`),
       r("Duration:", `${loc(hit.dur)} μs`));
     tt.append(r("Original kernel:", hit.originalName));
+    // The call this event belongs to: a copy-engine collective is several
+    // copies, each only named "Memcpy ...", so say which collective it is.
+    const call = hit.instance ?? hit, nEvents = call.events?.length ?? 1;
+    if (hit.collective) {
+      tt.append(r("Collective:", nEvents > 1
+        ? `${hit.collective} · event ${call.events.indexOf(hit) + 1} of ${nEvents} in this call` : hit.collective));
+      if (nEvents > 1) tt.append(r("Call duration:", `${loc(call.dur)} μs`));
+    }
     for (const [label, value] of [["Source rank:", hit.src], ["Destination rank:", hit.dst],
       ["Process group:", hit.pgId], ["Replica:", hit.replica], ["Elements:", hit.nelems],
       ["Dtype:", hit.dtype], ["Sequence ID:", hit.sequence], ["Graph:", hit.graph], ["Node:", hit.node]])
@@ -1919,10 +1927,10 @@ const pl = {
     const peers = this.cohortComplete(c);
     this.setHoverKey(peers ? hit.cohortKey : null);
     if (peers) {
-      const mine = (hit.instance ?? hit).ts - c.ear.ts, spread = c.lat.ts - c.ear.ts;
-      // "· this one" marks the hovered kernel as the extreme, so the reader
+      const mine = call.ts - c.ear.ts, spread = c.lat.ts - c.ear.ts;
+      // "· this one" marks the hovered call as the extreme, so the reader
       // never hunts for a rank they are already looking at.
-      const rk = (ev) => `rank ${ev.rank}` + (ev === hit ? " · this one" : "");
+      const rk = (inst) => `rank ${inst.rank}` + (inst === call ? " · this one" : "");
       const hot = (n, val) => el("div", { class: "r" }, el("span", { class: "n" }, n),
         el("span", { class: "v hot" }, val));
       tt.append(
@@ -1930,7 +1938,7 @@ const pl = {
         r("Start min:", `${loc(c.ear.ts - this.minT)} μs · ${rk(c.ear)}`),
         r("Start max:", `${loc(c.lat.ts - this.minT)} μs · ${rk(c.lat)}`),
         hot("Straggler:", `${rk(c.lat)} · +${loc(spread)} μs late`),
-        r("This kernel:", mine > 0 ? `+${loc(mine)} μs vs earliest` : "earliest of the cohort"),
+        r("This rank:", mine > 0 ? `+${loc(mine)} μs vs earliest` : "earliest of the cohort"),
         r("Dur min:", `${loc(c.quick.dur)} μs · ${rk(c.quick)}`),
         r("Dur max:", `${loc(c.slow.dur)} μs · ${rk(c.slow)}`),
         r("Imbalance:", c.ear.dur > 0 ? `${(spread / c.ear.dur * 100).toFixed(2)}% of earliest duration` : "—"));
@@ -1938,7 +1946,7 @@ const pl = {
     const bytes = this.payload(peers ? c.members : [hit]);
     if (bytes) {
       tt.append(r("Payload:", `${loc(bytes)} B`),
-        r("BW (this rank):", `${this.bandwidth(bytes, hit.dur).toFixed(2)} GB/s · incl. wait`));
+        r("BW (this rank):", `${this.bandwidth(bytes, call.dur).toFixed(2)} GB/s · incl. wait`));
       if (peers) tt.append(r("BW (min dur):", `${this.bandwidth(bytes, c.quick.dur).toFixed(2)} GB/s · rank ${c.quick.rank}`));
     }
     tt.append(r("Trace ts:", `${hit.ts.toFixed(3)} μs (raw)`));
