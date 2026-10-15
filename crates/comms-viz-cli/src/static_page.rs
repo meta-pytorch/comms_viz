@@ -401,7 +401,7 @@ pub fn render(
             serde_json::Value::Null
         },
         "rank_map": emb_value(&emb.rank_map),
-        "flat_1010": data.flat_1010,
+        "repaired_traces_dir": data.repaired_traces_dir,
         // Decimal STRINGS: real bases are epoch-scale ns (> 2^53), and the
         // page needs them BigInt-exact for Perfetto's slice select.
         "generated_at_s": generated_at_s,

@@ -424,15 +424,19 @@ pub fn parquet_schemas(per_pg_dir: &Path) -> String {
     out
 }
 
-/// Insta settings shared by every snapshot: strips the two pieces of
-/// output that legitimately change without a behavior change —
-/// the engine git rev baked into _meta/config.json (and re-serialized into
-/// the page payload) and the page's render wall-clock stamp.
+/// Insta settings shared by every snapshot: strips the output that
+/// legitimately changes without a behavior change -- the engine git rev
+/// baked into _meta/config.json (and re-serialized into the page payload),
+/// the page's render wall-clock stamp and the temp out dir.
 pub fn settings() -> insta::Settings {
     let mut s = insta::Settings::clone_current();
     s.set_prepend_module_to_snapshot(false);
     s.add_filter(r#""rev":\s*"[^"]+""#, r#""rev": "[GIT_REV]""#);
     s.add_filter(r#""generated_at_s":\s*\d+"#, r#""generated_at_s": "[TS]""#);
+    s.add_filter(
+        r#""repaired_traces_dir":\s*"[^"]+""#,
+        r#""repaired_traces_dir": "[TMP]/tree/local-run/traces/""#,
+    );
     s
 }
 

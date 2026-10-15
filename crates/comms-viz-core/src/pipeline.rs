@@ -872,10 +872,7 @@ fn process_rank(
     // before completion — see MemPermit::observe_transient.
     _mem_permit.observe_transient();
 
-    // 5. Optional merged-trace artifact. Names must stay rank-scannable
-    // (`NNNNNN.` + a known trace suffix) — that is what the publisher's
-    // upload set and the page's rank-map paths key on
-    // (host_map::scan_trace_paths). The bytes go to the run's writer pool
+    // 5. Optional merged-trace artifact. The bytes go to the run's writer pool
     // (an inline write here blocked the worker under dirty-page throttling),
     // but only after the analyze stage, permit-free — see below. The
     // verbatim arms MOVE replay_bytes instead of cloning ~3 MB per rank.
@@ -1312,10 +1309,11 @@ pub fn run(cfg: &RunConfig) -> Result<RunSummary> {
         },
         &phase_times,
     )?;
-    crate::host_map::emit_rank_hosts(
+    crate::host_map::emit_rank_map(
         &cfg.out_root.join("tree").join(&cfg.run_id),
         &cfg.trace_root,
         world_size,
+        &index.file_names(),
     )?;
 
     Ok(RunSummary {

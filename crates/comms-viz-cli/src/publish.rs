@@ -27,7 +27,8 @@ pub struct RunData {
     pub per_pg_warm: Vec<(String, Vec<u8>)>,
     pub per_pg_all: Vec<(String, u64, PathBuf)>,
     pub rank_map_json: Option<String>,
-    pub flat_1010: Option<serde_json::Value>,
+    /// Where `--write-repaired-traces` wrote the run's traces, if it did.
+    pub repaired_traces_dir: Option<String>,
     pub warnings: Vec<String>,
 }
 
@@ -184,7 +185,7 @@ fn default_group_idx(
         .or_else(|| candidates().min_by_key(|index| layout_key(&groups[*index].0)))
 }
 
-fn load_run_data(out_dir: &Path, tree: &ValidatedTree) -> Result<RunData> {
+fn load_run_data(tree: &ValidatedTree) -> Result<RunData> {
     let root = &tree.run_root;
     let run_json = read_json(&root.join("_meta/run.json"))?;
     let config_json = read_json(&root.join("_meta/config.json"))?;
@@ -217,17 +218,11 @@ fn load_run_data(out_dir: &Path, tree: &ValidatedTree) -> Result<RunData> {
         .into_iter()
         .collect();
 
-    let rank_hosts = std::fs::read_to_string(root.join("rank_hosts.json"))
+    // The analyzed ranks with their trace files and any known hosts.
+    let rank_map_json = std::fs::read_to_string(root.join("rank_map.json")).ok();
+    let repaired_traces_dir = std::fs::canonicalize(root.join("traces"))
         .ok()
-        .and_then(|text| comms_viz_core::host_map::parse_rank_hosts(&text).ok())
-        .unwrap_or_default();
-    let rank_paths = comms_viz_core::host_map::scan_trace_paths(&root.join("traces"));
-    let rank_map_json = comms_viz_core::host_map::rank_map_payload(&rank_hosts, &rank_paths);
-    let flat_1010 = read_json_opt(&out_dir.join("flat").join(format!(
-        "{}__{rd}__{rd}__1010.json",
-        tree.run_id,
-        rd = tree.result_dir
-    )));
+        .map(|p| format!("{}/", p.display()));
 
     Ok(RunData {
         run_id: tree.run_id.clone(),
@@ -241,7 +236,7 @@ fn load_run_data(out_dir: &Path, tree: &ValidatedTree) -> Result<RunData> {
         per_pg_warm,
         per_pg_all,
         rank_map_json,
-        flat_1010,
+        repaired_traces_dir,
         warnings: tree.warnings.clone(),
     })
 }
@@ -388,7 +383,7 @@ pub struct Targets<'a> {
 
 pub fn render_local(out_dir: &Path, run_id: Option<&str>, targets: Targets<'_>) -> Result<()> {
     let tree = validate_out_dir(out_dir, run_id)?;
-    let data = load_run_data(out_dir, &tree)?;
+    let data = load_run_data(&tree)?;
     let stem = page_stem(&data);
     render_page(&data, &stem, targets)
 }

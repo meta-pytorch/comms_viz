@@ -349,12 +349,6 @@ details.node > summary { cursor: pointer; font-size: 12px; padding: 1px 0; }
         <div class="pager" id="tr-more"></div>
       </div>
     </section>
-    <section class="tab" id="tab-topology">
-      <div class="card">
-        <h2>Network Topology</h2>
-        <div id="tp-body"></div>
-      </div>
-    </section>
     <section class="tab" id="tab-metadata">
       <div class="card"><h2>Trace Paths</h2><div id="md-paths"></div></div>
       <div class="card" style="margin-top:12px"><h2 id="md-cfg-title">Config</h2>
@@ -366,7 +360,7 @@ details.node > summary { cursor: pointer; font-size: 12px; padding: 1px 0; }
 <div class="footer" id="footer"></div>
 </div>
 </div>
-<script id="comms_viz-data" type="application/json">{"artifact_index":{},"bd_preview":null,"breakdown":{"t":"plain","v":"all_gather_total,all_reduce_total,all_to_all_total,comm_total,comp_total,cp_all_gather_total,cp_all_reduce_total,cp_all_to_all_total,cp_reduce_scatter_total,cudaEventSynchronize_total,cudaHostAlloc_total,cudaLaunchKernel_total,cudaStreamSynchronize_total,default_pg_all_gather_total,default_pg_all_reduce_total,default_pg_all_to_all_total,default_pg_reduce_scatter_total,dp_replicate_all_gather_total,dp_replicate_all_reduce_total,dp_replicate_all_to_all_total,dp_replicate_reduce_scatter_total,dp_shard_all_gather_total,dp_shard_all_reduce_total,dp_shard_all_to_all_total,dp_shard_reduce_scatter_total,ep_all_gather_total,ep_all_reduce_total,ep_all_to_all_total,ep_reduce_scatter_total,rank,reduce_scatter_total,total_duration,tp_all_gather_total,tp_all_reduce_total,tp_all_to_all_total,tp_reduce_scatter_total\n10372.0,14794.0,0.0,36296.0,30265.0,1989.0,1855.0,0.0,2055.0,373.0,423.0,374.0,471.0,1800.0,3245.0,0.0,822.0,2316.0,2539.0,0.0,1153.0,1506.0,3880.0,0.0,741.0,1144.0,1417.0,0.0,3545.0,0,11130.0,9313.0,1617.0,1858.0,0.0,2814.0\n12626.0,11195.0,0.0,38513.0,30149.0,1684.0,768.0,0.0,4217.0,377.0,544.0,404.0,435.0,1985.0,2093.0,0.0,2792.0,1423.0,1834.0,0.0,3323.0,1777.0,2799.0,0.0,1482.0,2403.0,2031.0,0.0,1319.0,1,14692.0,8971.0,3354.0,1670.0,0.0,1559.0\n9065.0,13232.0,0.0,37049.0,29620.0,862.0,1934.0,0.0,3153.0,427.0,408.0,493.0,462.0,1784.0,1858.0,0.0,2298.0,1059.0,2580.0,0.0,2645.0,2270.0,2449.0,0.0,1937.0,1032.0,1646.0,0.0,2617.0,2,14752.0,9347.0,2058.0,2765.0,0.0,2102.0\n11929.0,11070.0,0.0,35874.0,30483.0,1593.0,2516.0,0.0,2706.0,354.0,406.0,544.0,371.0,1908.0,2341.0,0.0,1802.0,2182.0,1479.0,0.0,1467.0,2197.0,1843.0,0.0,2557.0,1621.0,1982.0,0.0,2357.0,3,12875.0,9303.0,2428.0,909.0,0.0,1986.0\n11617.0,14718.0,0.0,36724.0,30194.0,2280.0,1800.0,0.0,1526.0,505.0,460.0,371.0,502.0,571.0,2491.0,0.0,1996.0,2903.0,937.0,0.0,2186.0,2176.0,3553.0,0.0,1350.0,2540.0,1843.0,0.0,1573.0,4,10389.0,9330.0,1147.0,4094.0,0.0,1758.0\n12524.0,14596.0,0.0,39202.0,30595.0,2573.0,2725.0,0.0,1425.0,393.0,510.0,428.0,450.0,2167.0,2228.0,0.0,2014.0,2034.0,2145.0,0.0,1619.0,1241.0,2127.0,0.0,3425.0,2466.0,2925.0,0.0,2356.0,5,12082.0,9009.0,2043.0,2446.0,0.0,1243.0\n13190.0,9805.0,0.0,35647.0,28201.0,3505.0,949.0,0.0,2117.0,484.0,446.0,422.0,439.0,2190.0,1400.0,0.0,3434.0,2720.0,1342.0,0.0,1256.0,1189.0,2293.0,0.0,2348.0,2261.0,2351.0,0.0,1814.0,6,12652.0,9079.0,1325.0,1470.0,0.0,1683.0\n13224.0,12734.0,0.0,37071.0,30448.0,2994.0,1461.0,0.0,2099.0,556.0,464.0,398.0,397.0,684.0,2511.0,0.0,2496.0,2851.0,1956.0,0.0,1064.0,1607.0,1737.0,0.0,1912.0,3460.0,2642.0,0.0,915.0,7,11113.0,8833.0,1628.0,2427.0,0.0,2627.0\n"},"config":{"engine":{"name":"comms_viz","rev": "[GIT_REV]","version":"0.1.0"},"result_dir":"mks_results","run_id":"local-run","trace_root":"/fixtures/synth/step_000000000106","worker_count":8,"world_size":8},"data_name":"comms_viz-local-run-step_106.pgdata","data_shards":null,"default_group":"cp_3","flat_1010":{"analyzer_id":1010,"host_map_pending":true,"name":"LLMTopologyAnalyzer","pg_axes":{"cp":8,"default_pg":8,"dp_replicate":8,"dp_shard":8,"ep":8,"tp":8},"world_size":8},"generated_at_s": "[TS]","metadata":{"capture":{"clock_origin_unit":"ns","id":"[\"\",\"/fixtures/synth/step_000000000106\",\"local-run\"]","pg_scope":["capture.id","replica_id","pg_id"],"rank_clock_origins_ns":{"0":null,"1":null,"2":null,"3":null,"4":null,"5":null,"6":null,"7":null},"run_id":"local-run","run_name":"","step":106,"timestamp_unit":"us","trace_root":"/fixtures/synth/step_000000000106"},"config":{"run_name":"","trace_folder_path":"/fixtures/synth/step_000000000106","world_size":8},"pg_info":{"groups":{"cp":{"alias":"cp","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["mesh_cp"],"pg_sizes":[8],"size":8},"default_pg":{"alias":"default_pg","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["default_pg"],"pg_sizes":[8],"size":8},"dp_replicate":{"alias":"dp_replicate","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["mesh_dp_replicate"],"pg_sizes":[8],"size":8},"dp_shard":{"alias":"dp_shard","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["mesh_dp_shard"],"pg_sizes":[8],"size":8},"ep":{"alias":"ep","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["mesh_ep"],"pg_sizes":[8],"size":8},"tp":{"alias":"tp","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["mesh_tp"],"pg_sizes":[8],"size":8}},"replica_size":null,"shuffle_piggyback":null,"valid_pgs":["cp","default_pg","dp_replicate","dp_shard","ep","tp"]}},"per_pg":[["cp_3","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"]],"pg_base":0,"pg_index":[["cp",[3,3916]],["default_pg",[0,3886]],["diagnostics",[0,236]],["dp_replicate",[5,3920]],["dp_shard",[1,4104]],["ep",[4,3816]],["tp",[2,4023]]],"pg_summary":[{"alias":"cp","count":1,"key":"cp","size":8},{"alias":"default_pg","count":1,"key":"default_pg","size":8},{"alias":"dp_replicate","count":1,"key":"dp_replicate","size":8},{"alias":"dp_shard","count":1,"key":"dp_shard","size":8},{"alias":"ep","count":1,"key":"ep","size":8},{"alias":"tp","count":1,"key":"tp","size":8}],"rank_map":{"t":"plain","v":"{\"hosts\":[],\"runs\":[[0,8,-1,0]],\"sfx\":[\".merged.pt.trace.json.gz\"],\"v\":1}"},"result_dir":"mks_results","run":{"completed_at":1700000001000000,"error":null,"run_id":"local-run","run_name":"","started_at":1700000000000000,"status":4,"total_ranks":8},"run_id":"local-run","status":{"elapsed_s":1.0,"phase":"completed","phases":{"aggregation":{"completed_at":1700000001000000,"duration_s":0.0,"started_at":1700000001000000,"status":"completed"},"assign":{"completed_at":1700000000000000,"duration_s":0.0,"started_at":1700000000000000,"status":"completed"},"claim":{"completed_at":1700000000000000,"duration_s":0.0,"started_at":1700000000000000,"status":"completed"},"processing":{"completed_at":1700000001000000,"duration_s":1.0,"started_at":1700000000000000,"status":"completed"}},"ranks":{"processed":8,"total":8},"run_id":"local-run","shard_count":8,"shards":{"completed":8,"failed":0,"in_flight":0,"pending":0},"version":2,"workers_active":0,"workers_done":8}}</script>
+<script id="comms_viz-data" type="application/json">{"artifact_index":{},"bd_preview":null,"breakdown":{"t":"plain","v":"all_gather_total,all_reduce_total,all_to_all_total,comm_total,comp_total,cp_all_gather_total,cp_all_reduce_total,cp_all_to_all_total,cp_reduce_scatter_total,cudaEventSynchronize_total,cudaHostAlloc_total,cudaLaunchKernel_total,cudaStreamSynchronize_total,default_pg_all_gather_total,default_pg_all_reduce_total,default_pg_all_to_all_total,default_pg_reduce_scatter_total,dp_replicate_all_gather_total,dp_replicate_all_reduce_total,dp_replicate_all_to_all_total,dp_replicate_reduce_scatter_total,dp_shard_all_gather_total,dp_shard_all_reduce_total,dp_shard_all_to_all_total,dp_shard_reduce_scatter_total,ep_all_gather_total,ep_all_reduce_total,ep_all_to_all_total,ep_reduce_scatter_total,rank,reduce_scatter_total,total_duration,tp_all_gather_total,tp_all_reduce_total,tp_all_to_all_total,tp_reduce_scatter_total\n10372.0,14794.0,0.0,36296.0,30265.0,1989.0,1855.0,0.0,2055.0,373.0,423.0,374.0,471.0,1800.0,3245.0,0.0,822.0,2316.0,2539.0,0.0,1153.0,1506.0,3880.0,0.0,741.0,1144.0,1417.0,0.0,3545.0,0,11130.0,9313.0,1617.0,1858.0,0.0,2814.0\n12626.0,11195.0,0.0,38513.0,30149.0,1684.0,768.0,0.0,4217.0,377.0,544.0,404.0,435.0,1985.0,2093.0,0.0,2792.0,1423.0,1834.0,0.0,3323.0,1777.0,2799.0,0.0,1482.0,2403.0,2031.0,0.0,1319.0,1,14692.0,8971.0,3354.0,1670.0,0.0,1559.0\n9065.0,13232.0,0.0,37049.0,29620.0,862.0,1934.0,0.0,3153.0,427.0,408.0,493.0,462.0,1784.0,1858.0,0.0,2298.0,1059.0,2580.0,0.0,2645.0,2270.0,2449.0,0.0,1937.0,1032.0,1646.0,0.0,2617.0,2,14752.0,9347.0,2058.0,2765.0,0.0,2102.0\n11929.0,11070.0,0.0,35874.0,30483.0,1593.0,2516.0,0.0,2706.0,354.0,406.0,544.0,371.0,1908.0,2341.0,0.0,1802.0,2182.0,1479.0,0.0,1467.0,2197.0,1843.0,0.0,2557.0,1621.0,1982.0,0.0,2357.0,3,12875.0,9303.0,2428.0,909.0,0.0,1986.0\n11617.0,14718.0,0.0,36724.0,30194.0,2280.0,1800.0,0.0,1526.0,505.0,460.0,371.0,502.0,571.0,2491.0,0.0,1996.0,2903.0,937.0,0.0,2186.0,2176.0,3553.0,0.0,1350.0,2540.0,1843.0,0.0,1573.0,4,10389.0,9330.0,1147.0,4094.0,0.0,1758.0\n12524.0,14596.0,0.0,39202.0,30595.0,2573.0,2725.0,0.0,1425.0,393.0,510.0,428.0,450.0,2167.0,2228.0,0.0,2014.0,2034.0,2145.0,0.0,1619.0,1241.0,2127.0,0.0,3425.0,2466.0,2925.0,0.0,2356.0,5,12082.0,9009.0,2043.0,2446.0,0.0,1243.0\n13190.0,9805.0,0.0,35647.0,28201.0,3505.0,949.0,0.0,2117.0,484.0,446.0,422.0,439.0,2190.0,1400.0,0.0,3434.0,2720.0,1342.0,0.0,1256.0,1189.0,2293.0,0.0,2348.0,2261.0,2351.0,0.0,1814.0,6,12652.0,9079.0,1325.0,1470.0,0.0,1683.0\n13224.0,12734.0,0.0,37071.0,30448.0,2994.0,1461.0,0.0,2099.0,556.0,464.0,398.0,397.0,684.0,2511.0,0.0,2496.0,2851.0,1956.0,0.0,1064.0,1607.0,1737.0,0.0,1912.0,3460.0,2642.0,0.0,915.0,7,11113.0,8833.0,1628.0,2427.0,0.0,2627.0\n"},"config":{"engine":{"name":"comms_viz","rev": "[GIT_REV]","version":"0.1.0"},"result_dir":"mks_results","run_id":"local-run","trace_root":"/fixtures/synth/step_000000000106","worker_count":8,"world_size":8},"data_name":"comms_viz-local-run-step_106.pgdata","data_shards":null,"default_group":"cp_3","generated_at_s": "[TS]","metadata":{"capture":{"clock_origin_unit":"ns","id":"[\"\",\"/fixtures/synth/step_000000000106\",\"local-run\"]","pg_scope":["capture.id","replica_id","pg_id"],"rank_clock_origins_ns":{"0":null,"1":null,"2":null,"3":null,"4":null,"5":null,"6":null,"7":null},"run_id":"local-run","run_name":"","step":106,"timestamp_unit":"us","trace_root":"/fixtures/synth/step_000000000106"},"config":{"run_name":"","trace_folder_path":"/fixtures/synth/step_000000000106","world_size":8},"pg_info":{"groups":{"cp":{"alias":"cp","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["mesh_cp"],"pg_sizes":[8],"size":8},"default_pg":{"alias":"default_pg","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["default_pg"],"pg_sizes":[8],"size":8},"dp_replicate":{"alias":"dp_replicate","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["mesh_dp_replicate"],"pg_sizes":[8],"size":8},"dp_shard":{"alias":"dp_shard","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["mesh_dp_shard"],"pg_sizes":[8],"size":8},"ep":{"alias":"ep","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["mesh_ep"],"pg_sizes":[8],"size":8},"tp":{"alias":"tp","backend_configs":["cuda:nccl"],"count":1,"pg_descs":["mesh_tp"],"pg_sizes":[8],"size":8}},"replica_size":null,"shuffle_piggyback":null,"valid_pgs":["cp","default_pg","dp_replicate","dp_shard","ep","tp"]}},"per_pg":[["cp_3","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"]],"pg_base":0,"pg_index":[["cp",[3,3916]],["default_pg",[0,3886]],["diagnostics",[0,236]],["dp_replicate",[5,3920]],["dp_shard",[1,4104]],["ep",[4,3816]],["tp",[2,4023]]],"pg_summary":[{"alias":"cp","count":1,"key":"cp","size":8},{"alias":"default_pg","count":1,"key":"default_pg","size":8},{"alias":"dp_replicate","count":1,"key":"dp_replicate","size":8},{"alias":"dp_shard","count":1,"key":"dp_shard","size":8},{"alias":"ep","count":1,"key":"ep","size":8},{"alias":"tp","count":1,"key":"tp","size":8}],"rank_map":{"t":"plain","v":"{\"hosts\":[],\"runs\":[[0,8,-1,0]],\"sfx\":[[\"#\",\".\",\".pt.trace.json.gz\",\"1700000000000\"]],\"tok\":[0,0,0,0,0,0,0,0],\"v\":1}"},"repaired_traces_dir": "[TMP]/tree/local-run/traces/","result_dir":"mks_results","run":{"completed_at":1700000001000000,"error":null,"run_id":"local-run","run_name":"","started_at":1700000000000000,"status":4,"total_ranks":8},"run_id":"local-run","status":{"elapsed_s":1.0,"phase":"completed","phases":{"aggregation":{"completed_at":1700000001000000,"duration_s":0.0,"started_at":1700000001000000,"status":"completed"},"assign":{"completed_at":1700000000000000,"duration_s":0.0,"started_at":1700000000000000,"status":"completed"},"claim":{"completed_at":1700000000000000,"duration_s":0.0,"started_at":1700000000000000,"status":"completed"},"processing":{"completed_at":1700000001000000,"duration_s":1.0,"started_at":1700000000000000,"status":"completed"}},"ranks":{"processed":8,"total":8},"run_id":"local-run","shard_count":8,"shards":{"completed":8,"failed":0,"in_flight":0,"pending":0},"version":2,"workers_active":0,"workers_done":8}}</script>
 <script>
 "use strict";
 const RAW = JSON.parse(document.getElementById("comms_viz-data").textContent);
@@ -814,7 +808,7 @@ function installGroupLabels(PG) {
 const stemLabel = (s) => STEM_LABEL.get(s) ?? s;
 const labelStem = (l) => LABEL_STEM.get(l) ?? l;
 // --- rank map ----------------------------------------------------------------
-let RANKMAP = [];  // [{rank, host}]
+let RANKMAP = [];  // [{rank, host, file}]
 let RANKBYID = new Map();  // rank -> RANKMAP row
 let HOSTS = [];    // [{host, ranks:[{rank}]}]
 function buildHosts() {
@@ -967,7 +961,7 @@ function renderPgSearch() {
 }
 // --- tabs ----------------------------------------------------------------------
 const TABS = [["breakdown", "Breakdown"], ["parallelism", "Parallelism"],
-  ["traces", "Collected Traces"], ["topology", "Network Topology"], ["metadata", "Metadata"]];
+  ["traces", "Collected Traces"], ["metadata", "Metadata"]];
 function renderTabs() {
   const nav = document.getElementById("tabs");
   for (const [id, label] of TABS)
@@ -2411,8 +2405,7 @@ const pl = {
 const tr = {
   expanded: new Set(), shown: 100, filter: null,
   init() {
-    document.getElementById("tr-count").textContent =
-      `${loc(HOSTS.length)} hosts · ${loc(RANKMAP.length)} ranks`;
+    document.getElementById("tr-count").textContent = this.count();
     const q = document.getElementById("tr-q");
     let t = null;
     const apply = async () => {
@@ -2436,12 +2429,16 @@ const tr = {
     });
     this.render();
   },
+  count() {
+    const ranks = `${loc(RANKMAP.length)} ranks`;
+    return HOSTS.some((h) => h.host) ? `${loc(HOSTS.length)} hosts · ${ranks}` : ranks;
+  },
   render() {
     const grid = document.getElementById("tr-hosts");
     grid.textContent = "";
     if (!RANKMAP.length) {
       grid.append(el("div", { class: "note" },
-        "No rank map in this run — host information was not resolved."));
+        "No rank map in this run."));
       return;
     }
     const match = this.filter && (this.filter.ranks.size || this.filter.hosts.size) ? this.filter : null;
@@ -2450,7 +2447,7 @@ const tr = {
     document.getElementById("tr-count").textContent = match
       ? `${loc(hosts.length)} of ${loc(HOSTS.length)} hosts · ${loc(match.ranks.size)} ranks match`
       : this.filter ? `no matches · showing all ${loc(HOSTS.length)} hosts`
-      : `${loc(HOSTS.length)} hosts · ${loc(RANKMAP.length)} ranks`;
+      : this.count();
     const visible = hosts.slice(0, this.shown);
     for (const h of visible) {
       const done = h.ranks.filter((r) => analyzed(r.rank)).length;
@@ -2461,7 +2458,7 @@ const tr = {
         style: `grid-template-columns:repeat(${Math.min(h.ranks.length, cols)},minmax(${digits * 7 + 10}px,1fr))` });
       if (isOpen) for (const r of h.ranks) {
         const hit = match && match.ranks.has(r.rank);
-        const title = `Rank ${r.rank} on ${h.host || "unknown host"}`;
+        const title = `Rank ${r.rank} on ${h.host || "unknown host"}` + (r.file ? `\n${r.file}` : "");
         body.append(el("span", {
           class: "rk" + (analyzed(r.rank) ? "" : " off") + (hit ? " hit" : ""), title,
         }, String(r.rank)));
@@ -2487,36 +2484,14 @@ const tr = {
         `Show more (${visible.length} of ${loc(hosts.length)})`));
   },
 };
-// --- topology -----------------------------------------------------------------
-// No topology source is available standalone, so this tab renders the
-// analyzer-1010 summary.
-function renderTopology() {
-  const body = document.getElementById("tp-body");
-  const f = RAW.flat_1010;
-  if (f) {
-    body.append(el("div", { class: "note" },
-      "Network-topology service data is not part of a standalone analysis — showing the analyzer-1010 summary."));
-    const kv = (k, v) => body.append(el("div", { class: "kv", style: "max-width:360px" },
-      el("span", { class: "k" }, k), el("span", { class: "v mono" }, v)));
-    if (f.world_size != null) kv("world_size", loc(f.world_size));
-    for (const [axis, n] of Object.entries(f.pg_axes || {})) kv(`pg_axes.${axis}`, String(n));
-    if (f.host_map_pending) body.append(el("div", { class: "warnbox" },
-      "host_map_pending: rank→host resolution was unavailable when this run was analyzed."));
-  } else {
-    body.append(el("div", { class: "note" }, "No topology data in this run."));
-  }
-}
 // --- metadata tab -------------------------------------------------------------
 function renderMetadata() {
   const paths = document.getElementById("md-paths");
   const kv = (box, k, v) => box.append(el("div", { class: "kv" },
     el("span", { class: "k" }, k), copySpan(v, "v mono")));
-  // Copying this one yields the bare path, not the "where to find it" aside.
-  paths.append(el("div", { class: "kv" }, el("span", { class: "k" }, "Preprocessed:"),
-    el("span", { class: "v mono" },
-      copySpan(`tree/${RAW.run_id}/traces/`), " (in the local out dir)")));
   const wsPath = (md && (md.trace_prefix || mdConfig.trace_folder_path)) || cfg.trace_root || "—";
   kv(paths, "Source:", wsPath);
+  kv(paths, "Repaired traces:", RAW.repaired_traces_dir || "N/A");
   const EXCLUDE = new Set(["run_name", "trace_folder_path",
     "preprocessed_trace_folder_path", "total_gpus"]);
   const entries = Object.entries(mdConfig).filter(([k]) => !EXCLUDE.has(k))
@@ -2596,21 +2571,32 @@ function redrawAll() { bd.draw(); pl.draw(); }
     ANALYZED = new Set(bd.ranks);
     tr.render();
   }).catch(() => bd.note(offlineNote("the full-resolution breakdown")));
-  // The rank map: the compact encoding (host_map::rank_map_payload) —
-  // contiguous rank runs share a host index.
+  // The rank map: the compact encoding (host_map::rank_map_payload) --
+  // contiguous rank runs share a host index and a trace-name suffix entry.
   artifactText("rank_map").catch(() => null).then((rmText) => {
     if (rmText) {
       const rm = JSON.parse(rmText);
-      for (const [start, len, h] of rm.runs || []) {
+      const pad = (r) => String(r).padStart(6, "0");
+      const bkt = (r) => {
+        let out = "", at = 0;
+        for (const c of rm.bkt || []) { out += pad(r).slice(at, c) + "/"; at = c; }
+        return out;
+      };
+      let ti = 0;
+      const file = (r, e) =>
+        typeof e === "string" ? bkt(r) + pad(r) + e
+        : e && e[0] === "rank_" ? "rank_" + r + e[1]
+        : e && e[0] === "#" ? bkt(r) + pad(r) + e[1] + (BigInt(e[3]) + BigInt(rm.tok[ti++])) + e[2]
+        : (rm.x || {})[r] || "";
+      for (const [start, len, h, s] of rm.runs || []) {
         for (let r = start; r < start + len; r++) {
-          RANKMAP.push({ rank: r, host: h < 0 ? "" : rm.hosts[h] });
+          RANKMAP.push({ rank: r, host: h < 0 ? "" : rm.hosts[h], file: file(r, rm.sfx[s]) });
         }
       }
     }
     buildHosts();
     tr.init();
   });
-  renderTopology();
   // Decode the pg_map island (rank lists) while idle, off the paint
   // path, so the PG calculator answers instantly when first used. Group
   // labels come from the island too, so an input filled before it parsed

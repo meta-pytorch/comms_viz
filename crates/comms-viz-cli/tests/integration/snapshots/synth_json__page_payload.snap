@@ -24,20 +24,6 @@ expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
   "data_name": "comms_viz-local-run-step_106.pgdata",
   "data_shards": null,
   "default_group": "cp_3",
-  "flat_1010": {
-    "analyzer_id": 1010,
-    "host_map_pending": true,
-    "name": "LLMTopologyAnalyzer",
-    "pg_axes": {
-      "cp": 8,
-      "default_pg": 8,
-      "dp_replicate": 8,
-      "dp_shard": 8,
-      "ep": 8,
-      "tp": 8
-    },
-    "world_size": 8
-  },
   "generated_at_s": "[TS]",
   "metadata": {
     "capture": {
@@ -266,8 +252,9 @@ expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
   ],
   "rank_map": {
     "t": "plain",
-    "v": "{\"hosts\":[],\"runs\":[[0,8,-1,0]],\"sfx\":[\".merged.pt.trace.json.gz\"],\"v\":1}"
+    "v": "{\"hosts\":[],\"runs\":[[0,8,-1,0]],\"sfx\":[[\"#\",\".\",\".pt.trace.json.gz\",\"1700000000000\"]],\"tok\":[0,0,0,0,0,0,0,0],\"v\":1}"
   },
+  "repaired_traces_dir": "[TMP]/tree/local-run/traces/",
   "result_dir": "mks_results",
   "run": {
     "completed_at": 1700000001000000,

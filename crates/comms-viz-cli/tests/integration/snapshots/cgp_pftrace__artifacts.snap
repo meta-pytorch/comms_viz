@@ -81,6 +81,7 @@ tree/local-run/mks_results/pipeline_a/per_pg/ep_4.parquet  11763B  sha256:1d3d9f
 tree/local-run/mks_results/pipeline_a/per_pg/tp_2.dpg  19443B  sha256:1af44f719ecd02e0
 tree/local-run/mks_results/pipeline_a/per_pg/tp_2.parquet  11812B  sha256:112530b1c2ae9e8a
 tree/local-run/pg_map.json  806B  sha256:57bdd743e453bd1e
+tree/local-run/rank_map.json  111B  sha256:8445e50a5f564e70
 tree/local-run/traces/000000.merged.pftrace.gz  23089B  sha256:324c47c3fac77430
 tree/local-run/traces/000001.merged.pftrace.gz  23011B  sha256:db0c1c22ce208f5b
 tree/local-run/traces/000002.merged.pftrace.gz  23108B  sha256:02da9f0559adb72a

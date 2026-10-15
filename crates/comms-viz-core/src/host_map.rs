@@ -4,22 +4,13 @@
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree.
 
-//! Rank→host resolution + the compact rank-map encoding behind
-//! `rank_hosts.json` and the published page's `rank_map` payload.
+//! Rank->host resolution + the compact rank-map encoding behind
+//! `tree/{run}/rank_map.json`, the published page's `rank_map` payload:
+//! every analyzed rank with its trace file name and, where known, host.
 //!
-//! Rank→host facts come from profile_logs: per-rank JSON files next to the
-//! trace folder (`/{traces|chrome_traces|compute}/` → `/profile_logs/`),
+//! Rank->host facts come from profile_logs: per-rank JSON files next to the
+//! trace folder (`/{traces|chrome_traces|compute}/` -> `/profile_logs/`),
 //! flat `<rank:06d>.txt` leaves or hash-bucketed digit dirs.
-//!
-//! What lands on disk is `tree/{run}/rank_hosts.json`, the hosts-only form
-//! of the compact encoding below (a per-rank `Rank,Host,Path` rank_map.csv
-//! predecessor is retired: at large world sizes it was megabytes of text
-//! whose Host column repeated each hostname once per local rank and whose
-//! Path column is recomputable from the traces/ listing). Hosts are the
-//! only analysis-time data the publisher cannot re-derive later, so they
-//! are all it persists; the page payload's rank map is rebuilt at publish
-//! time by `rank_map_payload` from this doc plus a fresh
-//! `scan_trace_paths`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -228,8 +219,7 @@ pub fn from_profile_logs(trace_root: &Path, world_size: i64) -> BTreeMap<i64, St
     out
 }
 
-/// Compact rank-map JSON, the encoding both `rank_hosts.json` and the
-/// published page's `rank_map` payload use:
+/// Compact rank-map JSON, the encoding of `rank_map.json`:
 ///
 /// ```json
 /// {"v":1,
@@ -245,7 +235,7 @@ pub fn from_profile_logs(trace_root: &Path, world_size: i64) -> BTreeMap<i64, St
 /// suffix index `s` (−1 = absent). Three suffix-entry forms reconstruct a
 /// rank's trace name:
 /// - a string `sfx[s]`: `bkt(r)` + the six-zero-padded rank + the entry
-///   (the on-disk shape `scan_trace_paths` guarantees). Restart-tag
+///   (the usual dump naming). Restart-tag
 ///   names (`<rank:06>.v<version>_a<attempt>_t<task-group attempt>.pt.trace.<suffix>`)
 ///   share one such entry per restart and format;
 /// - `["rank_", suffix]`: `rank_` + the unpadded rank + suffix;
@@ -587,96 +577,19 @@ pub fn decode_rank_paths(text: &str) -> Result<BTreeMap<i64, String>> {
     Ok(out)
 }
 
-/// Decode the rank→host side of a `rank_map_payload` doc (the publisher
-/// reads `rank_hosts.json` this way; suffixes/extras are path data it
-/// re-derives from the traces listing instead). Malformed input is a hard
-/// error so a corrupt doc degrades to "hosts unresolved" at the call site
-/// rather than silently mis-mapping ranks.
-pub fn parse_rank_hosts(text: &str) -> Result<BTreeMap<i64, String>> {
-    let doc: serde_json::Value = serde_json::from_str(text).context("parse rank-hosts doc")?;
-    anyhow::ensure!(
-        doc.get("v").and_then(serde_json::Value::as_i64) == Some(1),
-        "rank-hosts doc: unsupported version {:?}",
-        doc.get("v")
-    );
-    let hosts: Vec<&str> = doc
-        .get("hosts")
-        .and_then(serde_json::Value::as_array)
-        .map(|a| a.iter().filter_map(serde_json::Value::as_str).collect())
-        .unwrap_or_default();
-    let mut out = BTreeMap::new();
-    for run in doc
-        .get("runs")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let f = |i: usize| run.get(i).and_then(serde_json::Value::as_i64);
-        let (Some(start), Some(len), Some(h)) = (f(0), f(1), f(2)) else {
-            anyhow::bail!("rank-hosts doc: malformed run {run}");
-        };
-        if h < 0 {
-            continue;
-        }
-        let host = *hosts
-            .get(h as usize)
-            .with_context(|| format!("rank-hosts doc: host index {h} out of range"))?;
-        anyhow::ensure!(
-            (0..=MAX_DECODED_RANKS).contains(&len),
-            "rank-hosts doc: implausible run length {len}"
-        );
-        for r in start..start.saturating_add(len) {
-            out.insert(r, host.to_string());
-        }
-    }
-    Ok(out)
-}
-
-/// Decode bound for a single run (matches any real-world world size with
-/// room to spare) so a corrupt length can't balloon the map.
-const MAX_DECODED_RANKS: i64 = 100_000_000;
-
-/// Trace scan for the rank map: basenames under `tree/{run}/traces/`
-/// ending `.pt.trace.json.gz` whose name starts `NNNNNN.` (exactly six
-/// digits); per rank the lexicographically greatest basename wins.
-pub fn scan_trace_paths(traces_dir: &Path) -> BTreeMap<i64, String> {
-    let mut out: BTreeMap<i64, String> = BTreeMap::new();
-    let Ok(rd) = std::fs::read_dir(traces_dir) else {
-        return out;
-    };
-    for e in rd.filter_map(|e| e.ok()) {
-        let name = e.file_name().to_string_lossy().into_owned();
-        // Any known trace format: this scan only needs to identify a rank's
-        // trace file, not decode it (`crate::trace::is_trace_name`).
-        if !crate::trace::is_trace_name(&name) {
-            continue;
-        }
-        let b = name.as_bytes();
-        if b.len() < 7 || b[6] != b'.' || !b[..6].iter().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
-        let r: i64 = name[..6].parse().unwrap();
-        match out.get(&r) {
-            Some(cur) if name <= *cur => {}
-            _ => {
-                out.insert(r, name);
-            }
-        }
-    }
-    out
-}
-
-/// Emit `tree/{run}/rank_hosts.json` into `run_root`:
-///   - hosts: from the profile_logs tier;
-///   - no hosts → no rank_hosts.json (the doc carries no trace paths —
-///     the publisher re-derives those from the traces/ listing, so a
-///     hostless run has nothing to persist).
-pub fn emit_rank_hosts(run_root: &Path, trace_root: &Path, world_size: i64) -> Result<()> {
+/// Write `rank_map.json`: every analyzed rank with its trace file, plus its
+/// host where profile_logs record one.
+pub fn emit_rank_map(
+    run_root: &Path,
+    trace_root: &Path,
+    world_size: i64,
+    rank_files: &BTreeMap<i64, String>,
+) -> Result<()> {
     let rank_host = from_profile_logs(trace_root, world_size);
-    let Some(doc) = rank_map_payload(&rank_host, &BTreeMap::new()) else {
+    let Some(doc) = rank_map_payload(&rank_host, rank_files) else {
         return Ok(());
     };
-    let p = run_root.join("rank_hosts.json");
+    let p = run_root.join("rank_map.json");
     std::fs::create_dir_all(run_root).ok();
     std::fs::write(&p, doc).with_context(|| format!("write {p:?}"))?;
     Ok(())
@@ -1058,73 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_rank_hosts_round_trip_and_validation() {
-        let mut host = BTreeMap::new();
-        for r in 0..16i64 {
-            host.insert(r, format!("host{}", r / 8));
-        }
-        host.insert(20, "host9".to_string());
-        let doc = rank_map_payload(&host, &BTreeMap::new()).unwrap();
-        assert_eq!(parse_rank_hosts(&doc).unwrap(), host);
-
-        // Paths don't perturb the host decode.
-        let mut path = BTreeMap::new();
-        path.insert(3i64, "000003.t.gz".to_string());
-        path.insert(30i64, "000030.t.gz".to_string()); // paths-only rank
-        let doc = rank_map_payload(&host, &path).unwrap();
-        assert_eq!(parse_rank_hosts(&doc).unwrap(), host);
-
-        // Malformed docs are hard errors, not silent empties.
-        assert!(parse_rank_hosts("not json").is_err());
-        assert!(parse_rank_hosts(r#"{"v":2,"hosts":[],"runs":[]}"#).is_err());
-        assert!(
-            parse_rank_hosts(r#"{"v":1,"hosts":[],"runs":[[0,1,0,-1]]}"#).is_err(),
-            "host index out of range must error"
-        );
-        assert!(
-            parse_rank_hosts(r#"{"v":1,"hosts":["h"],"runs":[[0,9999999999,0,-1]]}"#).is_err(),
-            "implausible run length must error"
-        );
-    }
-
-    #[test]
-    fn scan_trace_paths_filters_and_lexmax() {
-        let td = tempfile::tempdir().unwrap();
-        let d = td.path();
-        for n in [
-            "000000.1111.pt.trace.json.gz",
-            "000000.2222.pt.trace.json.gz", // lex-max wins for rank 0
-            "000001.merged.pt.trace.json.gz",
-            "00002.x.pt.trace.json.gz",   // 5 digits → no match
-            "0000021.x.pt.trace.json.gz", // 7 digits → no match
-            "000003.something.json.txt",  // wrong suffix
-            "000004.merged.pftrace.gz",   // perfetto-native Replay artifact
-            "000005.merged.pftrace",      // ... uncompressed spelling
-            "readme.txt",
-        ] {
-            std::fs::write(d.join(n), b"").unwrap();
-        }
-        let m = scan_trace_paths(d);
-        assert_eq!(
-            m.get(&0).map(String::as_str),
-            Some("000000.2222.pt.trace.json.gz")
-        );
-        assert_eq!(
-            m.get(&1).map(String::as_str),
-            Some("000001.merged.pt.trace.json.gz")
-        );
-        assert_eq!(
-            m.get(&4).map(String::as_str),
-            Some("000004.merged.pftrace.gz")
-        );
-        assert_eq!(m.get(&5).map(String::as_str), Some("000005.merged.pftrace"));
-        assert_eq!(m.len(), 4);
-        // Missing dir → empty (a listing failure is non-fatal).
-        assert!(scan_trace_paths(&d.join("nope")).is_empty());
-    }
-
-    #[test]
-    fn emit_rank_hosts_from_profile_logs_or_nothing() {
+    fn emit_rank_map_lists_analyzed_ranks_and_hosts() {
         let td = tempfile::tempdir().unwrap();
         let run_root = td.path().join("tree/run1");
         std::fs::create_dir_all(&run_root).unwrap();
@@ -1135,18 +982,20 @@ mod tests {
         std::fs::create_dir_all(&logs).unwrap();
         std::fs::write(logs.join("000000.txt"), "{\"rank\": 0, \"host\": \"plh0\"}").unwrap();
 
-        emit_rank_hosts(&run_root, &trace_root, 1).unwrap();
+        let files = BTreeMap::from([(0, "rank0_trace.json.gz".to_string())]);
+        emit_rank_map(&run_root, &trace_root, 1, &files).unwrap();
         assert_eq!(
-            std::fs::read_to_string(run_root.join("rank_hosts.json")).unwrap(),
-            r#"{"hosts":["plh0"],"runs":[[0,1,0,-1]],"sfx":[],"v":1}"#
+            std::fs::read_to_string(run_root.join("rank_map.json")).unwrap(),
+            r#"{"hosts":["plh0"],"runs":[[0,1,0,-1]],"sfx":[],"v":1,"x":{"0":"rank0_trace.json.gz"}}"#
         );
 
-        // No hosts (no tier data) → no doc at all: trace paths are the
-        // publisher's to re-derive, so a hostless run persists nothing.
+        // No profile_logs: the analyzed ranks are still listed, hostless.
         let bare_root = td.path().join("nolayout/step_1");
         let run2 = td.path().join("tree/run2");
-        std::fs::create_dir_all(&run2).unwrap();
-        emit_rank_hosts(&run2, &bare_root, 1).unwrap();
-        assert!(!run2.join("rank_hosts.json").exists());
+        emit_rank_map(&run2, &bare_root, 1, &files).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(run2.join("rank_map.json")).unwrap(),
+            r#"{"hosts":[],"runs":[[0,1,-1,-1]],"sfx":[],"v":1,"x":{"0":"rank0_trace.json.gz"}}"#
+        );
     }
 }

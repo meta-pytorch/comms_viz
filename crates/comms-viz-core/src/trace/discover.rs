@@ -103,6 +103,14 @@ impl RankIndex {
             .unwrap_or_else(|| self.paths.keys().next_back().map_or(0, |r| r + 1))
     }
 
+    /// Each rank's trace file name, as analyzed.
+    pub(crate) fn file_names(&self) -> BTreeMap<i64, String> {
+        self.paths
+            .iter()
+            .filter_map(|(&rank, path)| Some((rank, path.file_name()?.to_str()?.to_string())))
+            .collect()
+    }
+
     /// Ranks below `world_size` without a trace.
     pub(crate) fn missing(&self, world_size: i64) -> Vec<i64> {
         (0..world_size)

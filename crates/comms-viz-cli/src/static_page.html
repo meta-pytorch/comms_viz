@@ -345,12 +345,6 @@ details.node > summary { cursor: pointer; font-size: 12px; padding: 1px 0; }
         <div class="pager" id="tr-more"></div>
       </div>
     </section>
-    <section class="tab" id="tab-topology">
-      <div class="card">
-        <h2>Network Topology</h2>
-        <div id="tp-body"></div>
-      </div>
-    </section>
     <section class="tab" id="tab-metadata">
       <div class="card"><h2>Trace Paths</h2><div id="md-paths"></div></div>
       <div class="card" style="margin-top:12px"><h2 id="md-cfg-title">Config</h2>
@@ -810,7 +804,7 @@ function installGroupLabels(PG) {
 const stemLabel = (s) => STEM_LABEL.get(s) ?? s;
 const labelStem = (l) => LABEL_STEM.get(l) ?? l;
 // --- rank map ----------------------------------------------------------------
-let RANKMAP = [];  // [{rank, host}]
+let RANKMAP = [];  // [{rank, host, file}]
 let RANKBYID = new Map();  // rank -> RANKMAP row
 let HOSTS = [];    // [{host, ranks:[{rank}]}]
 function buildHosts() {
@@ -963,7 +957,7 @@ function renderPgSearch() {
 }
 // --- tabs ----------------------------------------------------------------------
 const TABS = [["breakdown", "Breakdown"], ["parallelism", "Parallelism"],
-  ["traces", "Collected Traces"], ["topology", "Network Topology"], ["metadata", "Metadata"]];
+  ["traces", "Collected Traces"], ["metadata", "Metadata"]];
 function renderTabs() {
   const nav = document.getElementById("tabs");
   for (const [id, label] of TABS)
@@ -2407,8 +2401,7 @@ const pl = {
 const tr = {
   expanded: new Set(), shown: 100, filter: null,
   init() {
-    document.getElementById("tr-count").textContent =
-      `${loc(HOSTS.length)} hosts · ${loc(RANKMAP.length)} ranks`;
+    document.getElementById("tr-count").textContent = this.count();
     const q = document.getElementById("tr-q");
     let t = null;
     const apply = async () => {
@@ -2432,12 +2425,16 @@ const tr = {
     });
     this.render();
   },
+  count() {
+    const ranks = `${loc(RANKMAP.length)} ranks`;
+    return HOSTS.some((h) => h.host) ? `${loc(HOSTS.length)} hosts · ${ranks}` : ranks;
+  },
   render() {
     const grid = document.getElementById("tr-hosts");
     grid.textContent = "";
     if (!RANKMAP.length) {
       grid.append(el("div", { class: "note" },
-        "No rank map in this run — host information was not resolved."));
+        "No rank map in this run."));
       return;
     }
     const match = this.filter && (this.filter.ranks.size || this.filter.hosts.size) ? this.filter : null;
@@ -2446,7 +2443,7 @@ const tr = {
     document.getElementById("tr-count").textContent = match
       ? `${loc(hosts.length)} of ${loc(HOSTS.length)} hosts · ${loc(match.ranks.size)} ranks match`
       : this.filter ? `no matches · showing all ${loc(HOSTS.length)} hosts`
-      : `${loc(HOSTS.length)} hosts · ${loc(RANKMAP.length)} ranks`;
+      : this.count();
     const visible = hosts.slice(0, this.shown);
     for (const h of visible) {
       const done = h.ranks.filter((r) => analyzed(r.rank)).length;
@@ -2457,7 +2454,7 @@ const tr = {
         style: `grid-template-columns:repeat(${Math.min(h.ranks.length, cols)},minmax(${digits * 7 + 10}px,1fr))` });
       if (isOpen) for (const r of h.ranks) {
         const hit = match && match.ranks.has(r.rank);
-        const title = `Rank ${r.rank} on ${h.host || "unknown host"}`;
+        const title = `Rank ${r.rank} on ${h.host || "unknown host"}` + (r.file ? `\n${r.file}` : "");
         body.append(el("span", {
           class: "rk" + (analyzed(r.rank) ? "" : " off") + (hit ? " hit" : ""), title,
         }, String(r.rank)));
@@ -2483,36 +2480,14 @@ const tr = {
         `Show more (${visible.length} of ${loc(hosts.length)})`));
   },
 };
-// --- topology -----------------------------------------------------------------
-// No topology source is available standalone, so this tab renders the
-// analyzer-1010 summary.
-function renderTopology() {
-  const body = document.getElementById("tp-body");
-  const f = RAW.flat_1010;
-  if (f) {
-    body.append(el("div", { class: "note" },
-      "Network-topology service data is not part of a standalone analysis — showing the analyzer-1010 summary."));
-    const kv = (k, v) => body.append(el("div", { class: "kv", style: "max-width:360px" },
-      el("span", { class: "k" }, k), el("span", { class: "v mono" }, v)));
-    if (f.world_size != null) kv("world_size", loc(f.world_size));
-    for (const [axis, n] of Object.entries(f.pg_axes || {})) kv(`pg_axes.${axis}`, String(n));
-    if (f.host_map_pending) body.append(el("div", { class: "warnbox" },
-      "host_map_pending: rank→host resolution was unavailable when this run was analyzed."));
-  } else {
-    body.append(el("div", { class: "note" }, "No topology data in this run."));
-  }
-}
 // --- metadata tab -------------------------------------------------------------
 function renderMetadata() {
   const paths = document.getElementById("md-paths");
   const kv = (box, k, v) => box.append(el("div", { class: "kv" },
     el("span", { class: "k" }, k), copySpan(v, "v mono")));
-  // Copying this one yields the bare path, not the "where to find it" aside.
-  paths.append(el("div", { class: "kv" }, el("span", { class: "k" }, "Preprocessed:"),
-    el("span", { class: "v mono" },
-      copySpan(`tree/${RAW.run_id}/traces/`), " (in the local out dir)")));
   const wsPath = (md && (md.trace_prefix || mdConfig.trace_folder_path)) || cfg.trace_root || "—";
   kv(paths, "Source:", wsPath);
+  kv(paths, "Repaired traces:", RAW.repaired_traces_dir || "N/A");
   const EXCLUDE = new Set(["run_name", "trace_folder_path",
     "preprocessed_trace_folder_path", "total_gpus"]);
   const entries = Object.entries(mdConfig).filter(([k]) => !EXCLUDE.has(k))
@@ -2592,21 +2567,32 @@ function redrawAll() { bd.draw(); pl.draw(); }
     ANALYZED = new Set(bd.ranks);
     tr.render();
   }).catch(() => bd.note(offlineNote("the full-resolution breakdown")));
-  // The rank map: the compact encoding (host_map::rank_map_payload) —
-  // contiguous rank runs share a host index.
+  // The rank map: the compact encoding (host_map::rank_map_payload) --
+  // contiguous rank runs share a host index and a trace-name suffix entry.
   artifactText("rank_map").catch(() => null).then((rmText) => {
     if (rmText) {
       const rm = JSON.parse(rmText);
-      for (const [start, len, h] of rm.runs || []) {
+      const pad = (r) => String(r).padStart(6, "0");
+      const bkt = (r) => {
+        let out = "", at = 0;
+        for (const c of rm.bkt || []) { out += pad(r).slice(at, c) + "/"; at = c; }
+        return out;
+      };
+      let ti = 0;
+      const file = (r, e) =>
+        typeof e === "string" ? bkt(r) + pad(r) + e
+        : e && e[0] === "rank_" ? "rank_" + r + e[1]
+        : e && e[0] === "#" ? bkt(r) + pad(r) + e[1] + (BigInt(e[3]) + BigInt(rm.tok[ti++])) + e[2]
+        : (rm.x || {})[r] || "";
+      for (const [start, len, h, s] of rm.runs || []) {
         for (let r = start; r < start + len; r++) {
-          RANKMAP.push({ rank: r, host: h < 0 ? "" : rm.hosts[h] });
+          RANKMAP.push({ rank: r, host: h < 0 ? "" : rm.hosts[h], file: file(r, rm.sfx[s]) });
         }
       }
     }
     buildHosts();
     tr.init();
   });
-  renderTopology();
   // Decode the pg_map island (rank lists) while idle, off the paint
   // path, so the PG calculator answers instantly when first used. Group
   // labels come from the island too, so an input filled before it parsed
