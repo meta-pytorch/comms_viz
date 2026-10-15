@@ -1064,7 +1064,7 @@ fn decode_render_stage(
     let (mut dtype, mut coll) = (NO_NAME, NO_NAME);
     let (mut in_nelems, mut out_nelems, mut group_size) = (-1, -1, -1);
 
-    let mut comm_values: [Option<&[u8]>; 9] = [None; 9];
+    let mut comm_values: [Option<&[u8]>; crate::comm::KEYS.len()] = [None; crate::comm::KEYS.len()];
     let mut fs = Fields::new(b);
     while let Some((f, v)) = fs.next_field()? {
         match (f, v) {
@@ -1203,6 +1203,12 @@ fn decode_render_stage(
                 "graph node id",
                 (combine_gnid(gid, gnid) as u64).to_string(),
             );
+        }
+        // The event id, when present, is the correlation (as on PfEvent below).
+        // CUPTI correlation ids start at 1; exporters write 0 when there is none.
+        let correlation = if event_id != -1 { event_id } else { corr };
+        if correlation > 0 {
+            comm.set("correlation", correlation.to_string());
         }
         tr.comm.insert(tr.events.len(), comm);
     }

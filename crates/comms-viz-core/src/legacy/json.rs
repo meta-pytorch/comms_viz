@@ -1000,7 +1000,7 @@ fn scan_grid<'a>(d: &'a [u8], i: usize) -> Result<(Sc<'a>, usize)> {
 /// The event fields the converter and the walk consume, captured per event.
 #[derive(Default, Clone, Copy)]
 struct EvCap<'a> {
-    comm: [Option<&'a [u8]>; 9],
+    comm: [Option<&'a [u8]>; crate::comm::KEYS.len()],
     cat: Option<Sc<'a>>,
     name: Option<Sc<'a>>,
     ph: Option<Sc<'a>>,
@@ -1025,7 +1025,7 @@ struct EvCap<'a> {
 impl EvCap<'_> {
     /// A replacing (last-wins) `args` discards the previous object's fields.
     fn clear_args(&mut self) {
-        self.comm = [None; 9];
+        self.comm = [None; crate::comm::KEYS.len()];
         self.stream = None;
         self.grid = None;
         self.pg_desc = None;

@@ -661,7 +661,9 @@ function eventsFromTable(names, get, nrows) {
       operation, src, dst, pg: col.pg_name != null ? String(get(col.pg_name, r)) : "",
       pgId: optional("pg_id"), replica: optional("replica_id"),
       nelems: optional("msg_nelems"), dtype: optional("dtype"), sequence: optional("sequence_id"),
-      graph: optional("graph_id"), node: optional("node_id"),
+      graph: optional("graph_id"), node: optional("node_id"), replay: optional("replay_id"),
+      // Artifacts from before the column existed held only kernels.
+      commKernel: col.comm_kernel == null || +get(col.comm_kernel, r) === 1,
       kernel: col.kernel_name != null ? String(get(col.kernel_name, r)) : "",
       collective: col.collective_name != null ? String(get(col.collective_name, r)) : "",
       inN: col.in_nelems != null ? +get(col.in_nelems, r) : -1,
@@ -1917,7 +1919,7 @@ const pl = {
     const peers = this.cohortComplete(c);
     this.setHoverKey(peers ? hit.cohortKey : null);
     if (peers) {
-      const mine = hit.ts - c.ear.ts, spread = c.lat.ts - c.ear.ts;
+      const mine = (hit.instance ?? hit).ts - c.ear.ts, spread = c.lat.ts - c.ear.ts;
       // "· this one" marks the hovered kernel as the extreme, so the reader
       // never hunts for a rank they are already looking at.
       const rk = (ev) => `rank ${ev.rank}` + (ev === hit ? " · this one" : "");
@@ -1944,17 +1946,19 @@ const pl = {
     placeTip(tt, e);
   },
   // Peer cohorts, shared so the imbalance table, straggler stats and hover
-  // tooltip can never disagree about who the straggler is. Kernels match on
-  // (physical PG, step, c10d sequence); one sequence can launch several
-  // kernels, so occurrence is counted within that key on every rank. Without
-  // sequence metadata the k-th kernel of every rank forms cohort k. Built once
-  // per group (build() invalidates) and stamped onto the events as
-  // `cohortKey`, so hover stays O(1) instead of re-bucketing per pixel.
+  // tooltip can never disagree about who the straggler is. Each rank's events
+  // are first grouped into one instance per collective call (instances()), so
+  // a call that launches several kernels or copies counts once. Instances
+  // match on (physical PG, step, collective, c10d sequence), and occurrence is
+  // counted within that key on every rank. Without sequence metadata the k-th
+  // event of every rank forms cohort k. Built once per group (build()
+  // invalidates) and stamped onto the events as `cohortKey`, so hover stays
+  // O(1) instead of re-bucketing per pixel.
   cohorts() {
     if (this._cohorts) return this._cohorts;
     const perRank = new Map();
     for (const e of this.events) {
-      e.cohortKey = null;
+      e.cohortKey = null; e.instance = null;
       if (e.flash) continue;
       if (!perRank.has(e.rank)) perRank.set(e.rank, []);
       perRank.get(e.rank).push(e);
@@ -1965,31 +1969,66 @@ const pl = {
     for (const evs of perRank.values()) {
       evs.sort((a, b) => a.ts - b.ts);
       const occurrences = new Map();
-      evs.forEach((ev, k) => {
-        if (bySeq && ev.sequence == null) return;
-        const base = bySeq ? `${ev.pg}\u0000${ev.step ?? "?"}\u0000${ev.sequence}` : `ordinal\u0000${k}`;
+      this.instances(evs, bySeq).forEach((inst, k) => {
+        // p2p ops share one cohort per sequence so a send meets its recv.
+        const kind = inst.operation ? "p2p" : inst.collective;
+        const base = bySeq ? `${inst.pg}\u0000${inst.step ?? "?"}\u0000${kind}\u0000${inst.sequence}` : `ordinal\u0000${k}`;
         const occurrence = occurrences.get(base) || 0;
         occurrences.set(base, occurrence + 1);
         const key = `${base}\u0000${occurrence}`;
         let c = byKey.get(key);
         if (!c) {
-          const seq = bySeq ? Number(ev.sequence) : k;
-          c = { seq: Number.isFinite(seq) ? seq : ev.sequence, bySeq, step: ev.step, n: 0, ear: ev, lat: ev,
-            quick: ev, slow: ev, matched: true, members: [] };
+          const seq = bySeq ? Number(inst.sequence) : k;
+          c = { seq: Number.isFinite(seq) ? seq : inst.sequence, bySeq, step: inst.step, n: 0, ear: inst, lat: inst,
+            quick: inst, slow: inst, matched: true, members: [] };
           byKey.set(key, c); list.push(c);
-        } else if (c.ear.originalName !== ev.originalName) {
+        } else if (c.ear.matchName !== inst.matchName) {
           c.matched = false;
         }
-        if (c.step !== ev.step) c.step = null;
-        c.n++; c.members.push(ev); ev.cohortKey = key;
-        if (ev.ts < c.ear.ts) c.ear = ev;
-        if (ev.ts > c.lat.ts) c.lat = ev;
-        if (ev.dur < c.quick.dur) c.quick = ev;
-        if (ev.dur > c.slow.dur) c.slow = ev;
+        if (c.step !== inst.step) c.step = null;
+        c.n++; c.members.push(inst);
+        for (const ev of inst.events) ev.cohortKey = key;
+        if (inst.ts < c.ear.ts) c.ear = inst;
+        if (inst.ts > c.lat.ts) c.lat = inst;
+        if (inst.dur < c.quick.dur) c.quick = inst;
+        if (inst.dur > c.slow.dur) c.slow = inst;
       });
     }
     this._cohorts = { list, byKey, bySeq };
     return this._cohorts;
+  },
+  // One rank's events (sorted by start) as one instance per collective call.
+  // Events a call tags with the same collective metadata, e.g. a copy-engine
+  // all-gather's several copies, join one instance when they share PG, step,
+  // collective, sequence, p2p direction and peer, and graph replay, and are
+  // consecutive among that PG's events, since graph replays repeat
+  // sequences. Events without a sequence are never grouped. An instance with
+  // a communication kernel spans its kernels, so local work the call also
+  // tags, like copy-in/out, can't stretch it; one made only of copies (a
+  // copy-engine collective) spans all of them.
+  instances(evs, bySeq) {
+    const groups = [], open = new Map(); // pg -> [key, events] of its last group
+    for (const ev of evs) {
+      if (bySeq && ev.sequence == null) continue;
+      const peer = ev.operation === "send" ? ev.dst : ev.operation === "recv" ? ev.src : "";
+      const key = ev.sequence == null ? null : [ev.step ?? "?", ev.collective, ev.sequence,
+        ev.operation ?? "", peer ?? "", ev.replay ?? ""].join("\u0000");
+      const last = open.get(ev.pg);
+      if (key != null && last && last[0] === key) { last[1].push(ev); continue; }
+      const group = [ev];
+      groups.push(group);
+      open.set(ev.pg, [key, group]);
+    }
+    return groups.map((events) => {
+      const kernels = events.filter((e) => e.commKernel);
+      const timed = kernels.length ? kernels : events;
+      let ts = Infinity, end = -Infinity;
+      for (const e of timed) { ts = Math.min(ts, e.ts); end = Math.max(end, e.ts + e.dur); }
+      const inst = { ...events[0], ts, dur: end - ts, events,
+        matchName: events[0].collective || events[0].originalName };
+      for (const e of events) e.instance = inst;
+      return inst;
+    });
   },
   cohortComplete(c) {
     if (!c || c.n < 2 || !c.matched) return false;

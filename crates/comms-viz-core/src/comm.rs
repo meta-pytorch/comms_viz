@@ -7,7 +7,7 @@
 //! Communication annotations retained by the compact timeline. Values remain
 //! strings so optional and large identifiers survive CSV/DPG1 without rounding.
 
-pub const KEYS: [&str; 9] = [
+pub const KEYS: [&str; 10] = [
     "Collective name",
     "Process Group Ranks",
     "peer",
@@ -17,10 +17,13 @@ pub const KEYS: [&str; 9] = [
     "graph id",
     "graph node id",
     "Process Group Name",
+    // The launching call's id. A graph-replayed event carries its
+    // cudaGraphLaunch's, so it identifies the replay.
+    "correlation",
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CommMetadata(pub [Option<String>; 9]);
+pub struct CommMetadata(pub [Option<String>; KEYS.len()]);
 
 pub fn is_comm(name: &str) -> bool {
     crate::kernel_types::matches_comm_pattern(name)

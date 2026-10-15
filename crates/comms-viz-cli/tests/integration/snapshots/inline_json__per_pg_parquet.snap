@@ -28,6 +28,8 @@ expression: "harness::parquet_schemas(&pipeline_a.join(\"per_pg\"))"
   graph_id: str
   node_id: str
   graph_node_id: str
+  replay_id: str
+  comm_kernel: i64
 ===== default_pg_0.parquet: 88 rows
   name: str
   ts: f64
@@ -54,6 +56,8 @@ expression: "harness::parquet_schemas(&pipeline_a.join(\"per_pg\"))"
   graph_id: str
   node_id: str
   graph_node_id: str
+  replay_id: str
+  comm_kernel: i64
 ===== diagnostics_0.parquet: 4 rows
   kind: str
   rank: i32
@@ -90,6 +94,8 @@ expression: "harness::parquet_schemas(&pipeline_a.join(\"per_pg\"))"
   graph_id: str
   node_id: str
   graph_node_id: str
+  replay_id: str
+  comm_kernel: i64
 ===== dp_shard_1.parquet: 92 rows
   name: str
   ts: f64
@@ -116,6 +122,8 @@ expression: "harness::parquet_schemas(&pipeline_a.join(\"per_pg\"))"
   graph_id: str
   node_id: str
   graph_node_id: str
+  replay_id: str
+  comm_kernel: i64
 ===== ep_4.parquet: 88 rows
   name: str
   ts: f64
@@ -142,6 +150,8 @@ expression: "harness::parquet_schemas(&pipeline_a.join(\"per_pg\"))"
   graph_id: str
   node_id: str
   graph_node_id: str
+  replay_id: str
+  comm_kernel: i64
 ===== tp_2.parquet: 92 rows
   name: str
   ts: f64
@@ -168,3 +178,5 @@ expression: "harness::parquet_schemas(&pipeline_a.join(\"per_pg\"))"
   graph_id: str
   node_id: str
   graph_node_id: str
+  replay_id: str
+  comm_kernel: i64

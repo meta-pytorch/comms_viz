@@ -632,6 +632,8 @@ fn breakdown(
 /// Filtered comm kernels with compact transfer metadata.
 struct Filtered {
     original_name: Vec<String>,
+    /// Kernel (true) or copy (false); copies join only as tagged collective work.
+    kernel: Vec<bool>,
     comm: Vec<crate::comm::CommMetadata>,
     name: Vec<String>,
     ts: Vec<f64>,
@@ -651,6 +653,7 @@ impl Filtered {
     fn new() -> Self {
         Filtered {
             original_name: Vec::new(),
+            kernel: Vec::new(),
             comm: Vec::new(),
             name: Vec::new(),
             ts: Vec::new(),
@@ -691,15 +694,18 @@ impl Filtered {
         if stream == -1 {
             return;
         }
-        if cat != "kernel" {
-            return;
+        let annotated = kernel_types::is_annotated_collective(collective_name, pg_name);
+        // Kernels, plus copies a collective call tags with its metadata, e.g. a
+        // copy-engine all-gather's copies, which have no kernel to stand for them.
+        match cat {
+            "kernel" => {}
+            "gpu_memcpy" if annotated => {}
+            _ => return,
         }
         let Some(name) = name else {
             return;
         };
-        if !names.get(name).comm_pattern
-            && !kernel_types::is_annotated_collective(collective_name, pg_name)
-        {
+        if !names.get(name).comm_pattern && !annotated {
             return;
         }
         // strip_prefix("void ") then regex-replace-first `[<(].*` → "" ==
@@ -711,6 +717,7 @@ impl Filtered {
             .unwrap_or(stripped);
         self.original_name
             .push(original_name.unwrap_or(name).to_string());
+        self.kernel.push(cat == "kernel");
         self.comm.push(comm.cloned().unwrap_or_default());
         self.name.push(cut.to_string());
         self.ts.push(ts);
@@ -956,6 +963,20 @@ fn filtered_to_df(f: &Filtered, sel: &[u32], rank: i64) -> Result<DataFrame> {
         .collect();
     let (graph, node): (Vec<_>, Vec<_>) =
         sel.iter().map(|&i| f.comm[i as usize].graph_ids()).unzip();
+    // A graph-replayed event's correlation is its cudaGraphLaunch's, so it names
+    // the replay; on an eager event it names only that one launch.
+    let replay: Vec<Option<String>> = sel
+        .iter()
+        .zip(&graph)
+        .map(|(&i, g)| g.as_ref().and(f.comm[i as usize].get(9).map(str::to_owned)))
+        .collect();
+    // A collective call that launches a communication kernel is timed by it,
+    // not by local work the call also tags (copy-in/out); a call made only of
+    // copies (copy-engine collectives) is timed by all of them.
+    let comm_kernel: Vec<i64> = sel
+        .iter()
+        .map(|&i| i64::from(f.kernel[i as usize]))
+        .collect();
     let columns = vec![
         Column::new("name".into(), take_s(&f.name)),
         Column::new("ts".into(), take(&f.ts)),
@@ -982,6 +1003,8 @@ fn filtered_to_df(f: &Filtered, sel: &[u32], rank: i64) -> Result<DataFrame> {
         Column::new("graph_id".into(), graph),
         Column::new("node_id".into(), node),
         Column::new("graph_node_id".into(), field(7)),
+        Column::new("replay_id".into(), replay),
+        Column::new("comm_kernel".into(), comm_kernel),
     ];
     Ok(DataFrame::new_infer_height(columns)?)
 }
@@ -1334,6 +1357,7 @@ mod tests {
     fn one_kernel(name: &str, para_type: &str) -> Filtered {
         Filtered {
             original_name: vec![name.to_string()],
+            kernel: vec![true],
             comm: vec![Default::default()],
             name: vec![name.to_string()],
             ts: vec![1.0],
@@ -1446,6 +1470,7 @@ mod process_group_tests {
     fn trace_topology_splits_by_physical_group() {
         let filt = Filtered {
             original_name: vec!["ncclKernel_AllReduce_RING_LL".into()],
+            kernel: vec![true],
             comm: vec![Default::default()],
             name: vec!["ncclKernel_AllReduce_RING_LL".into()],
             ts: vec![1.0],
