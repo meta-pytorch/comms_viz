@@ -826,10 +826,13 @@ fn process_rank(
         scratch.shrink_to_fit();
     }
 
-    let mut process_groups = if cfg.trace_format == trace::Format::Json {
-        crate::legacy::json::process_group_configs(&scratch[..n])
+    let (mut process_groups, environment) = if cfg.trace_format == trace::Format::Json {
+        (
+            crate::legacy::json::process_group_configs(&scratch[..n]),
+            crate::legacy::json::trace_environment(&scratch[..n]),
+        )
     } else {
-        Vec::new()
+        Default::default()
     };
 
     // 4+6. Merge + convert (fast path). Merge failure falls back to the raw
@@ -1037,6 +1040,7 @@ fn process_rank(
         base_ns,
         pg_dfs,
         process_groups,
+        environment,
     }))
 }
 
@@ -1288,6 +1292,12 @@ pub fn run(cfg: &RunConfig) -> Result<RunSummary> {
         started_at_us: meta.started_at_us,
         updated_at_us: meta.completed_at_us,
     };
+    let environments: std::collections::BTreeMap<i64, crate::legacy::json::TraceEnvironment> =
+        results
+            .iter()
+            .flatten()
+            .map(|r| (r.rank, r.environment.clone()))
+            .collect();
     let summary = crate::emit::emit_run(&cfg.out_root, &meta, &mut results, Some(&meta_ctx))?;
     let phase_times = crate::emit::PhaseTimes {
         starts_us: [
@@ -1301,6 +1311,7 @@ pub fn run(cfg: &RunConfig) -> Result<RunSummary> {
         &cfg.out_root,
         &meta,
         &summary.process_groups,
+        &environments,
         // emit_run emitted every worker's partial or errored out
         // above — reaching here means all of them completed.
         &crate::emit::StatusCounts {
@@ -1314,6 +1325,10 @@ pub fn run(cfg: &RunConfig) -> Result<RunSummary> {
         &cfg.trace_root,
         world_size,
         &index.file_names(),
+        &environments
+            .iter()
+            .filter_map(|(&rank, env)| Some((rank, env.host.clone()?)))
+            .collect(),
     )?;
 
     Ok(RunSummary {
@@ -1363,7 +1378,10 @@ fn build_meta(cfg: &RunConfig, world_size: i64, w_count: i64) -> RunMeta {
         started_at_us: cfg.started_at_us,
         completed_at_us: cfg.completed_at_us,
         worker_count: w_count,
-        config_extra: vec![("engine".into(), crate::emit::engine_stamp())],
+        config_extra: vec![
+            ("engine".into(), crate::emit::engine_stamp()),
+            ("trace_format".into(), cfg.trace_format.as_str().into()),
+        ],
     }
 }
 

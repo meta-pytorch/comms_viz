@@ -2,23 +2,23 @@
 source: crates/comms-viz-cli/tests/integration/analysis.rs
 expression: "harness::concat_dir(&out_dir.join(\"flat\"), |n| n.ends_with(\".json\"))"
 ---
-===== local-run__mks_results__mks_results__1001.json
+===== local-run__results__1001.json
 {"analysis_pending":true,"analyzer_id":1001,"name":"LlmFailureAnalyzer","total_ranks":4}
-===== local-run__mks_results__mks_results__1002.json
+===== local-run__results__1002.json
 {"analysis_pending":true,"analyzer_id":1002,"name":"CollectHostMapAnalyzer","total_ranks":4}
-===== local-run__mks_results__mks_results__1003.json
+===== local-run__results__1003.json
 {"analysis_pending":true,"analyzer_id":1003,"name":"NCCLCommMemoryUsageAnalyzer","total_ranks":4}
-===== local-run__mks_results__mks_results__1004.json
+===== local-run__results__1004.json
 {"analysis_pending":true,"analyzer_id":1004,"name":"NCCLCommsInitAnalyzer","total_ranks":4}
-===== local-run__mks_results__mks_results__1005.json
+===== local-run__results__1005.json
 {"analysis_pending":true,"analyzer_id":1005,"name":"NCCLCommsLogAnalyzer","total_ranks":4}
-===== local-run__mks_results__mks_results__1007.json
+===== local-run__results__1007.json
 {"analysis_pending":true,"analyzer_id":1007,"name":"NCCLCommDumpAnalyzer","total_ranks":4}
-===== local-run__mks_results__mks_results__1008.json
+===== local-run__results__1008.json
 {"analysis_pending":true,"analyzer_id":1008,"fragmentation_pctg":null,"name":"LLMMemoryAnalyzer","oom_detected":false,"peak_memory_bytes":null,"total_ranks":4}
-===== local-run__mks_results__mks_results__1009.json
+===== local-run__results__1009.json
 {"analyzer_id":1009,"is_folder_sharded":false,"name":"DumpTraceFolderAnalyzer","trace_folder_path":"/fixtures/cgp/step_000000000106"}
-===== local-run__mks_results__mks_results__1010.json
+===== local-run__results__1010.json
 {"analyzer_id":1010,"host_map_pending":true,"name":"LLMTopologyAnalyzer","pg_axes":{"cp":4,"default_pg":4,"dp_replicate":4,"dp_shard":4,"ep":4,"tp":4},"world_size":4}
-===== local-run__mks_results__mks_results__1011.json
+===== local-run__results__1011.json
 {"analysis_pending":true,"analyzer_id":1011,"name":"LlmSlowRankAnalyzer","total_ranks":4}

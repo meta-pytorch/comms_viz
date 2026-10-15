@@ -31,6 +31,7 @@ use serde_json::json;
 
 use crate::analysis::BreakdownValue;
 use crate::analysis::DIAGNOSTICS_PG;
+use crate::legacy::json::TraceEnvironment;
 use crate::trace::ProcessGroupConfig;
 
 /// One rank's processing output (order of `pg_dfs` = rank_info order).
@@ -40,12 +41,12 @@ pub struct RankResult {
     pub breakdown_row: Vec<(&'static str, BreakdownValue)>,
     pub pg_dfs: Vec<(String, DataFrame)>,
     pub process_groups: Vec<ProcessGroupConfig>,
+    pub environment: TraceEnvironment,
 }
 
-/// Result directory under `tree/{run}/`. The artifact tree keeps the
-/// internal MKS layout (`mks_results/pipeline_a`, flat analyzer keys) so
-/// existing readers of that layout work unchanged.
-pub const RESULT_DIR: &str = "mks_results";
+/// Result directory under `tree/{run}/`, recorded in `_meta/config.json`
+/// so the publisher also reads trees written under another name.
+pub const RESULT_DIR: &str = "results";
 
 /// Parameterized run metadata (timestamps/uuids/hosts are inputs so the
 /// snapshot suite can pin output bytes deterministically).
@@ -706,31 +707,29 @@ fn aggregate_decoded(
     );
     let t_promo = std::time::Instant::now();
 
-    // ---- Promotion: copy staging/{mks_results,mks_results_trace} → final,
+    // ---- Promotion: copy staging/{RESULT_DIR} -> final,
     // MANIFEST last (list order: LIFO dir queue, files in ls order). ----
     let mut manifest_rels: Vec<String> = Vec::new();
-    for subdir in ["mks_results/", "mks_results_trace/"] {
-        let prefix = staging.join(subdir.trim_end_matches('/'));
-        let staging_root = staging.clone();
-        let mut queue: Vec<PathBuf> = vec![prefix];
-        while let Some(cur) = queue.pop() {
-            let Ok(rd) = std::fs::read_dir(&cur) else {
-                continue;
-            };
-            let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).collect();
-            entries.sort_by_key(|e| e.file_name());
-            for e in entries {
-                let path = e.path();
-                if path.is_dir() {
-                    queue.push(path);
-                } else {
-                    let rel = path
-                        .strip_prefix(&staging_root)
-                        .unwrap()
-                        .to_string_lossy()
-                        .into_owned();
-                    manifest_rels.push(rel);
-                }
+    let prefix = staging.join(RESULT_DIR);
+    let staging_root = staging.clone();
+    let mut queue: Vec<PathBuf> = vec![prefix];
+    while let Some(cur) = queue.pop() {
+        let Ok(rd) = std::fs::read_dir(&cur) else {
+            continue;
+        };
+        let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let path = e.path();
+            if path.is_dir() {
+                queue.push(path);
+            } else {
+                let rel = path
+                    .strip_prefix(&staging_root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                manifest_rels.push(rel);
             }
         }
     }
@@ -1264,6 +1263,61 @@ pub fn analyzer_payloads(
     out
 }
 
+/// The run environment across ranks: per field, in display order, each
+/// distinct value with the ranks that recorded it (`"0-7,16"`).
+fn environment_json(environments: &BTreeMap<i64, TraceEnvironment>) -> Value {
+    // (key, [(value, ranks)]) in first-seen order.
+    type ValueRanks<'a> = Vec<(&'a str, Vec<i64>)>;
+    let mut fields: Vec<(&str, ValueRanks)> = Vec::new();
+    for (&rank, env) in environments {
+        for (key, value) in &env.fields {
+            let i = match fields.iter().position(|(k, _)| k == key) {
+                Some(i) => i,
+                None => {
+                    fields.push((key, Vec::new()));
+                    fields.len() - 1
+                }
+            };
+            let values = &mut fields[i].1;
+            match values.iter_mut().find(|(v, _)| v == value) {
+                Some((_, ranks)) => ranks.push(rank),
+                None => values.push((value, vec![rank])),
+            }
+        }
+    }
+    Value::Array(
+        fields
+            .into_iter()
+            .map(|(key, values)| {
+                let values: Vec<Value> = values
+                    .into_iter()
+                    .map(|(value, ranks)| json!({"value": value, "ranks": rank_ranges(&ranks)}))
+                    .collect();
+                json!({"key": key, "values": values})
+            })
+            .collect(),
+    )
+}
+
+/// Ascending ranks as compact ranges: `[0, 1, 2, 5]` -> `"0-2,5"`.
+fn rank_ranges(ranks: &[i64]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < ranks.len() {
+        let mut j = i;
+        while j + 1 < ranks.len() && ranks[j + 1] == ranks[j] + 1 {
+            j += 1;
+        }
+        out.push(if i == j {
+            ranks[i].to_string()
+        } else {
+            format!("{}-{}", ranks[i], ranks[j])
+        });
+        i = j + 1;
+    }
+    out.join(",")
+}
+
 /// Write metadata docs + analyzer flat JSONs for a completed run.
 /// (Per-worker heartbeats/failure docs are NOT written here — they are
 /// emitted at partial-write time, one per emulated worker.)
@@ -1271,6 +1325,7 @@ pub fn emit_metadata(
     out_root: &Path,
     meta: &RunMeta,
     trace_process_groups: &[ProcessGroupConfig],
+    environments: &BTreeMap<i64, TraceEnvironment>,
     counts: &StatusCounts,
     phases: &PhaseTimes,
 ) -> Result<()> {
@@ -1339,19 +1394,17 @@ pub fn emit_metadata(
         "rank_clock_origins_ns": clocks,
         "pg_scope": ["capture.id", "replica_id", "pg_id"],
     });
+    metadata["environment"] = environment_json(environments);
     write_file(&run_root.join("metadata.json"), dumps(&metadata).as_bytes())?;
     write_file(
         &run_root.join("pg_map.json"),
         pg_map_json(trace_process_groups).as_bytes(),
     )?;
 
-    // flat analyzer JSONs: flat/{run}__mks_results__mks_results__{aid:04d}.json
+    // flat analyzer JSONs: flat/{run}__{RESULT_DIR}__{aid:04d}.json
     let flat_dir = out_root.join("flat");
     for (aid, payload) in analyzer_payloads(meta, trace_process_groups) {
-        let key = format!(
-            "{}__{}__mks_results__{:04}.json",
-            meta.run_id, RESULT_DIR, aid
-        );
+        let key = format!("{}__{}__{:04}.json", meta.run_id, RESULT_DIR, aid);
         write_file(&flat_dir.join(key), payload.as_bytes())?;
     }
     Ok(())
@@ -1380,6 +1433,37 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].ranks, vec![0, 1]);
         assert_eq!(groups[0].pg_size, 2);
+    }
+
+    #[test]
+    fn environment_groups_ranks_by_value() {
+        let env = |driver: &str| TraceEnvironment {
+            host: None,
+            fields: vec![
+                ("gpu", "8x NVIDIA H100".to_string()),
+                ("cuda_driver", driver.to_string()),
+            ],
+        };
+        let envs: BTreeMap<i64, TraceEnvironment> = [
+            (0, env("13.4")),
+            (1, env("13.4")),
+            (2, env("12.8")),
+            (3, env("13.4")),
+            (5, env("13.4")),
+            (4, TraceEnvironment::default()),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            environment_json(&envs),
+            json!([
+                {"key": "gpu", "values": [{"value": "8x NVIDIA H100", "ranks": "0-3,5"}]},
+                {"key": "cuda_driver", "values": [
+                    {"value": "13.4", "ranks": "0-1,3,5"},
+                    {"value": "12.8", "ranks": "2"},
+                ]},
+            ])
+        );
     }
 
     #[test]
@@ -1436,7 +1520,15 @@ mod tests {
         let phases = PhaseTimes {
             starts_us: [meta().started_at_us; 4],
         };
-        emit_metadata(tmp.path(), &meta(), &configs, &counts, &phases).unwrap();
+        emit_metadata(
+            tmp.path(),
+            &meta(),
+            &configs,
+            &BTreeMap::new(),
+            &counts,
+            &phases,
+        )
+        .unwrap();
         let metadata: Value = serde_json::from_slice(
             &std::fs::read(tmp.path().join("tree/r0/metadata.json")).unwrap(),
         )
@@ -1461,7 +1553,7 @@ mod tests {
         });
         aggregate_decoded(tmp.path(), &meta(), &[partial]).unwrap();
 
-        let per_pg = tmp.path().join("tree/r0/mks_results/pipeline_a/per_pg");
+        let per_pg = tmp.path().join("tree/r0/results/pipeline_a/per_pg");
         assert_eq!(per_pg_members(&per_pg), vec!["tp_abcd.dpg"]);
         let payload = std::fs::read(per_pg.join("tp_abcd.dpg")).unwrap();
         assert_eq!(crate::dpg::member_to_text(&payload), "rank,dur\n0,1\n1,1\n");
@@ -1586,7 +1678,7 @@ mod tests {
         let phases = PhaseTimes {
             starts_us: [m.started_at_us; 4],
         };
-        emit_metadata(tmp.path(), &m, &[], &counts, &phases).unwrap();
+        emit_metadata(tmp.path(), &m, &[], &BTreeMap::new(), &counts, &phases).unwrap();
         let config =
             std::fs::read_to_string(tmp.path().join("tree/test-run/_meta/config.json")).unwrap();
         assert!(config.contains(&format!("\"trace_root\":\"{REMOTE_URI}\"")));
@@ -1617,7 +1709,7 @@ mod tests {
         let phases = PhaseTimes {
             starts_us: [m.started_at_us; 4],
         };
-        emit_metadata(tmp.path(), &m, &[], &counts, &phases).unwrap();
+        emit_metadata(tmp.path(), &m, &[], &BTreeMap::new(), &counts, &phases).unwrap();
         let config =
             std::fs::read_to_string(tmp.path().join("tree/test-run/_meta/config.json")).unwrap();
         assert!(config.contains("\"trace_root\":\"/stage/step_000000000106\""));
@@ -1658,7 +1750,7 @@ mod tests {
         )
         .unwrap();
 
-        let per_pg = tmp.path().join("tree/r0/mks_results/pipeline_a/per_pg");
+        let per_pg = tmp.path().join("tree/r0/results/pipeline_a/per_pg");
         assert!(per_pg.join("diagnostics_0.dpg").is_file());
         assert!(summary.pg_keys.is_empty());
     }

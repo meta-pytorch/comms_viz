@@ -17,7 +17,6 @@ use anyhow::bail;
 
 pub struct RunData {
     pub run_id: String,
-    pub result_dir: String,
     pub run_json: serde_json::Value,
     pub config_json: serde_json::Value,
     pub status_json: serde_json::Value,
@@ -103,7 +102,7 @@ fn validate_out_dir(out_dir: &Path, select_run_id: Option<&str>) -> Result<Valid
                 .and_then(|dir| dir.as_str())
                 .map(str::to_string)
         })
-        .unwrap_or_else(|| "mks_results".to_string());
+        .unwrap_or_else(|| comms_viz_core::emit::RESULT_DIR.to_string());
 
     Ok(ValidatedTree {
         run_id,
@@ -226,7 +225,6 @@ fn load_run_data(tree: &ValidatedTree) -> Result<RunData> {
 
     Ok(RunData {
         run_id: tree.run_id.clone(),
-        result_dir: tree.result_dir.clone(),
         run_json,
         config_json,
         status_json,

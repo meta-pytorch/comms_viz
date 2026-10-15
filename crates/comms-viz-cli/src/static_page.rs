@@ -374,7 +374,6 @@ pub fn render(
 
     let payload = json!({
         "run_id": data.run_id,
-        "result_dir": data.result_dir,
         "run": data.run_json,
         "config": data.config_json,
         "status": data.status_json,

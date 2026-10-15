@@ -137,6 +137,163 @@ pub fn process_group_configs(replay_bytes: &[u8]) -> Vec<crate::trace::ProcessGr
     }
 }
 
+/// The run environment a trace's envelope records. PyTorch's exporters
+/// (Kineto's writer, the streaming CUDA-graph exporter, Cuspy's JSON export)
+/// each write a different subset; absent fields are left out.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TraceEnvironment {
+    pub host: Option<String>,
+    /// (key, display value) in display order.
+    pub fields: Vec<(&'static str, String)>,
+}
+
+/// Profiler options PyTorch records in the envelope only when enabled.
+const PROFILER_OPTIONS: [&str; 5] = [
+    "record_shapes",
+    "profile_memory",
+    "with_stack",
+    "with_modules",
+    "with_flops",
+];
+
+/// Read the envelope's top-level keys into a [`TraceEnvironment`].
+pub fn trace_environment(replay_bytes: &[u8]) -> TraceEnvironment {
+    let mut header: std::collections::HashMap<String, SValue> = Default::default();
+    let mut scanner = Scanner {
+        b: replay_bytes,
+        i: 0,
+    };
+    if scanner.bump() == Some(b'{') {
+        loop {
+            match scanner.peek() {
+                Some(b'}') | None => break,
+                Some(b',') => {
+                    scanner.bump();
+                }
+                _ => {}
+            }
+            let Some(key) = scanner.parse_string() else {
+                break;
+            };
+            if scanner.bump() != Some(b':') {
+                break;
+            }
+            scanner.ws();
+            let value_start = scanner.i;
+            if scanner.skip_value().is_none() {
+                break;
+            }
+            if key == "traceEvents" {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_slice(&replay_bytes[value_start..scanner.i]) {
+                header.insert(key, v);
+            }
+        }
+    }
+
+    // Version fields are numbers from Kineto, strings from user metadata.
+    let int = |v: &SValue| v.as_i64().or_else(|| v.as_str()?.parse().ok());
+    // CUDA's encoding: 1000 * major + 10 * minor.
+    let cuda_version = |v: &SValue| int(v).map(|n| format!("{}.{}", n / 1000, n % 1000 / 10));
+    let dist = header.get("distributedInfo");
+    let dist_field = |k: &str| dist.and_then(|d| d.get(k));
+    let mut fields: Vec<(&'static str, String)> = Vec::new();
+    let mut push = |key: &'static str, value: Option<String>| {
+        if let Some(v) = value.filter(|v| !v.is_empty()) {
+            fields.push((key, v));
+        }
+    };
+    push(
+        "gpu",
+        header
+            .get("deviceProperties")
+            .and_then(SValue::as_array)
+            .and_then(|d| gpu_summary(d)),
+    );
+    push(
+        "cuda_driver",
+        header.get("cuda_driver_version").and_then(cuda_version),
+    );
+    push(
+        "cuda_runtime",
+        header.get("cuda_runtime_version").and_then(cuda_version),
+    );
+    push(
+        "cupti",
+        header
+            .get("cupti_version")
+            .and_then(int)
+            .map(|n| n.to_string()),
+    );
+    push(
+        "nccl",
+        dist_field("nccl_version")
+            .and_then(SValue::as_str)
+            .map(str::to_string),
+    );
+    push(
+        "backend",
+        dist_field("backend")
+            .and_then(SValue::as_str)
+            .map(str::to_string),
+    );
+    push(
+        "process_groups",
+        dist_field("pg_count").and_then(int).map(|n| n.to_string()),
+    );
+    let enabled: Vec<&str> = PROFILER_OPTIONS
+        .into_iter()
+        .filter(|k| header.get(*k).and_then(int).is_some_and(|n| n != 0))
+        .collect();
+    push("profiler_options", Some(enabled.join(", ")));
+    TraceEnvironment {
+        host: header
+            .get("host_name")
+            .and_then(SValue::as_str)
+            .map(str::to_string),
+        fields,
+    }
+}
+
+/// "8x NVIDIA H100 (132 SMs, 95 GiB, sm_90)": the host's visible devices,
+/// identical ones counted together.
+fn gpu_summary(devices: &[SValue]) -> Option<String> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for d in devices {
+        let Some(name) = d.get("name").and_then(SValue::as_str) else {
+            continue;
+        };
+        let mut parts = Vec::new();
+        if let Some(n) = d.get("numSms").and_then(SValue::as_i64) {
+            parts.push(format!("{n} SMs"));
+        }
+        if let Some(b) = d.get("totalGlobalMem").and_then(SValue::as_f64) {
+            parts.push(format!("{:.0} GiB", b / (1u64 << 30) as f64));
+        }
+        let cc = |k| d.get(k).and_then(SValue::as_i64);
+        if let (Some(major), Some(minor)) = (cc("computeMajor"), cc("computeMinor")) {
+            parts.push(format!("sm_{major}{minor}"));
+        }
+        let desc = if parts.is_empty() {
+            name.to_string()
+        } else {
+            format!("{name} ({})", parts.join(", "))
+        };
+        match counts.iter_mut().find(|(d, _)| *d == desc) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((desc, 1)),
+        }
+    }
+    (!counts.is_empty()).then(|| {
+        counts
+            .into_iter()
+            .map(|(desc, n)| format!("{n}x {desc}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
+}
+
 struct Scanner<'a> {
     b: &'a [u8],
     i: usize,
@@ -1786,6 +1943,42 @@ mod tests {
         ));
         assert!(!is_inline_annotated_bytes(br#"{"traceEvents": []}"#));
         assert!(!is_inline_annotated_bytes(b"not json"));
+    }
+
+    #[test]
+    fn reads_trace_environment_from_envelope() {
+        let env = trace_environment(
+            br#"{
+                "schemaVersion": 1,
+                "deviceProperties": [
+                    {"id": 0, "name": "NVIDIA H100", "totalGlobalMem": 102085361664,
+                     "computeMajor": 9, "computeMinor": 0, "numSms": 132},
+                    {"id": 1, "name": "NVIDIA H100", "totalGlobalMem": 102085361664,
+                     "computeMajor": 9, "computeMinor": 0, "numSms": 132}
+                ],
+                "record_shapes": 1,
+                "distributedInfo": {"backend": "nccl", "rank": 0, "world_size": 2,
+                                    "pg_count": 3, "nccl_version": "2.30.4"},
+                "cuda_driver_version": 13040,
+                "cuda_runtime_version": 13000,
+                "traceEvents": [{"name": "x"}],
+                "host_name": "host-a"
+            }"#,
+        );
+        assert_eq!(env.host.as_deref(), Some("host-a"));
+        assert_eq!(
+            env.fields,
+            vec![
+                ("gpu", "2x NVIDIA H100 (132 SMs, 95 GiB, sm_90)".to_string()),
+                ("cuda_driver", "13.4".to_string()),
+                ("cuda_runtime", "13.0".to_string()),
+                ("nccl", "2.30.4".to_string()),
+                ("backend", "nccl".to_string()),
+                ("process_groups", "3".to_string()),
+                ("profiler_options", "record_shapes".to_string()),
+            ]
+        );
+        assert_eq!(trace_environment(b"{}"), TraceEnvironment::default());
     }
 
     #[test]

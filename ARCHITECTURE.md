@@ -102,13 +102,13 @@ appears in a group's timeline only if it carries the process-group metadata.
 ```
 <out>/
   tree/<run-id>/                 analysis results; the reports are built only from this
-    mks_results/pipeline_a/
+    results/pipeline_a/
       breakdown.parquet          Breakdown tab, one row per rank
       per_pg/<axis>_<pg>.dpg     one group's comm kernels, all ranks
       per_pg/diagnostics_0.dpg   utilization and GPU counters
     pg_map.json                  axis -> group -> ranks
-    rank_hosts.json              rank -> host, when profile logs sit next to the traces
-    metadata.json                capture info
+    rank_map.json                analyzed rank -> trace file and host
+    metadata.json                capture info and run environment
     _meta/                       run config and status
     traces/                      repaired traces, with --write-repaired-traces
   report/<stem>.html             the page; <stem> starts with comms_viz_<run-id>

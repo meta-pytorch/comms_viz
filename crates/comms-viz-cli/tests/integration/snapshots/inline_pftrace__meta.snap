@@ -3,16 +3,16 @@ source: crates/comms-viz-cli/tests/integration/analysis.rs
 expression: meta_dump
 ---
 ===== MANIFEST
-mks_results/pipeline_a/breakdown.parquet
-mks_results/pipeline_a/per_pg/cp_3.parquet
-mks_results/pipeline_a/per_pg/default_pg_0.parquet
-mks_results/pipeline_a/per_pg/diagnostics_0.parquet
-mks_results/pipeline_a/per_pg/dp_replicate_5.parquet
-mks_results/pipeline_a/per_pg/dp_shard_1.parquet
-mks_results/pipeline_a/per_pg/ep_4.parquet
-mks_results/pipeline_a/per_pg/tp_2.parquet
+results/pipeline_a/breakdown.parquet
+results/pipeline_a/per_pg/cp_3.parquet
+results/pipeline_a/per_pg/default_pg_0.parquet
+results/pipeline_a/per_pg/diagnostics_0.parquet
+results/pipeline_a/per_pg/dp_replicate_5.parquet
+results/pipeline_a/per_pg/dp_shard_1.parquet
+results/pipeline_a/per_pg/ep_4.parquet
+results/pipeline_a/per_pg/tp_2.parquet
 ===== config.json
-{"engine":{"name":"comms_viz","rev": "[GIT_REV]","version":"0.1.0"},"result_dir":"mks_results","run_id":"local-run","trace_root":"/fixtures/inline-pftrace/step_000000000106","worker_count":4,"world_size":4}
+{"engine":{"name":"comms_viz","rev": "[GIT_REV]","version":"0.1.0"},"result_dir":"results","run_id":"local-run","trace_format":"pftrace","trace_root":"/fixtures/inline-pftrace/step_000000000106","worker_count":4,"world_size":4}
 ===== run.json
 {"completed_at":1700000001000000,"error":null,"run_id":"local-run","run_name":"","started_at":1700000000000000,"status":4,"total_ranks":4}
 ===== status.json

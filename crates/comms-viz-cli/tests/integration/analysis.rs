@@ -42,7 +42,7 @@ fn snapshot_fixture(fx: &Fixture) {
             harness::artifact_manifest(&out_dir, fx.merged_stable)
         );
 
-        let pipeline_a = out_dir.join("tree/local-run/mks_results/pipeline_a");
+        let pipeline_a = out_dir.join("tree/local-run/results/pipeline_a");
         insta::assert_snapshot!(
             format!("{}__breakdown", fx.name),
             harness::parquet_csv(&pipeline_a.join("breakdown.parquet"))
@@ -130,7 +130,7 @@ fn format_twins_agree_on_pg_structure() {
         harness::analyze(harness::fixture(b), &out_b, tmp.path(), &[]);
         let listing = |out: &Path| -> Vec<String> {
             let mut v: Vec<String> =
-                std::fs::read_dir(out.join("tree/local-run/mks_results/pipeline_a/per_pg"))
+                std::fs::read_dir(out.join("tree/local-run/results/pipeline_a/per_pg"))
                     .expect("per_pg")
                     .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
                     .collect();

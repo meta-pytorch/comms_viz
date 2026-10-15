@@ -15,8 +15,9 @@ expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
       "rev": "[GIT_REV]",
       "version": "0.1.0"
     },
-    "result_dir": "mks_results",
+    "result_dir": "results",
     "run_id": "local-run",
+    "trace_format": "json",
     "trace_root": "/fixtures/inline/step_000000000106",
     "worker_count": 4,
     "world_size": 4
@@ -51,6 +52,7 @@ expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
       "trace_folder_path": "/fixtures/inline/step_000000000106",
       "world_size": 4
     },
+    "environment": [],
     "pg_info": {
       "groups": {
         "cp": {
@@ -251,7 +253,6 @@ expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
     "v": "{\"hosts\":[],\"runs\":[[0,4,-1,0]],\"sfx\":[[\"#\",\".\",\".pt.trace.json.gz\",\"1700000000000\"]],\"tok\":[0,0,0,0],\"v\":1}"
   },
   "repaired_traces_dir": "[TMP]/tree/local-run/traces/",
-  "result_dir": "mks_results",
   "run": {
     "completed_at": 1700000001000000,
     "error": null,

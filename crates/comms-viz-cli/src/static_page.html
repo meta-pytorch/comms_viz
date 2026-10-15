@@ -347,7 +347,7 @@ details.node > summary { cursor: pointer; font-size: 12px; padding: 1px 0; }
     </section>
     <section class="tab" id="tab-metadata">
       <div class="card"><h2>Trace Paths</h2><div id="md-paths"></div></div>
-      <div class="card" style="margin-top:12px"><h2 id="md-cfg-title">Config</h2>
+      <div class="card" style="margin-top:12px"><h2>Config</h2>
         <div class="cfg" id="md-cfg"></div></div>
       <div class="card" style="margin-top:12px"><h2>Engine</h2><div id="md-engine"></div></div>
     </section>
@@ -2490,21 +2490,20 @@ function renderMetadata() {
   const wsPath = (md && (md.trace_prefix || mdConfig.trace_folder_path)) || cfg.trace_root || "—";
   kv(paths, "Source:", wsPath);
   kv(paths, "Repaired traces:", RAW.repaired_traces_dir || "N/A");
-  const EXCLUDE = new Set(["run_name", "trace_folder_path",
-    "preprocessed_trace_folder_path", "total_gpus"]);
-  const entries = Object.entries(mdConfig).filter(([k]) => !EXCLUDE.has(k))
-    .sort((a, b) => a[0].localeCompare(b[0]));
-  document.getElementById("md-cfg-title").textContent = `Config (${entries.length})`;
+  // The trace format, then the run environment the traces record (each
+  // field only when some trace has it).
   const cfgBox = document.getElementById("md-cfg");
-  for (const [k, v] of entries) kv(cfgBox, k + ":", String(v));
-  const engBox = document.getElementById("md-engine");
+  if (cfg.trace_format) kv(cfgBox, "trace format:", cfg.trace_format);
+  const ENV_LABELS = { gpu: "GPU", cuda_driver: "CUDA driver", cuda_runtime: "CUDA runtime",
+    cupti: "CUPTI", nccl: "NCCL", backend: "backend", process_groups: "process groups",
+    profiler_options: "profiler options" };
+  for (const { key, values } of (md && md.environment) || []) {
+    kv(cfgBox, (ENV_LABELS[key] || key) + ":", values.length === 1 ? values[0].value
+      : values.map((v) => `${v.value} (ranks ${v.ranks})`).join("; "));
+  }
   const eng = cfg.engine || {};
-  kv(engBox, "name:", eng.name || "—");
-  kv(engBox, "version:", eng.version || "—");
-  kv(engBox, "rev:", eng.rev || "—");
-  kv(engBox, "result_dir:", RAW.result_dir);
-  kv(engBox, "world_size:", String(cfg.world_size ?? "—"));
-  kv(engBox, "worker_count:", String(cfg.worker_count ?? "—"));
+  kv(document.getElementById("md-engine"), "comms_viz:",
+    `${eng.version || "—"}, rev ${eng.rev || "—"}`);
 }
 // --- side nav ------------------------------------------------------------
 // The left rail contains the run's metadata and process-group sections.

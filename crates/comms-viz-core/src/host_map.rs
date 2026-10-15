@@ -578,14 +578,18 @@ pub fn decode_rank_paths(text: &str) -> Result<BTreeMap<i64, String>> {
 }
 
 /// Write `rank_map.json`: every analyzed rank with its trace file, plus its
-/// host where profile_logs record one.
+/// host from profile_logs, else from the trace itself.
 pub fn emit_rank_map(
     run_root: &Path,
     trace_root: &Path,
     world_size: i64,
     rank_files: &BTreeMap<i64, String>,
+    trace_hosts: &BTreeMap<i64, String>,
 ) -> Result<()> {
-    let rank_host = from_profile_logs(trace_root, world_size);
+    let mut rank_host = from_profile_logs(trace_root, world_size);
+    for (&rank, host) in trace_hosts {
+        rank_host.entry(rank).or_insert_with(|| host.clone());
+    }
     let Some(doc) = rank_map_payload(&rank_host, rank_files) else {
         return Ok(());
     };
@@ -983,19 +987,26 @@ mod tests {
         std::fs::write(logs.join("000000.txt"), "{\"rank\": 0, \"host\": \"plh0\"}").unwrap();
 
         let files = BTreeMap::from([(0, "rank0_trace.json.gz".to_string())]);
-        emit_rank_map(&run_root, &trace_root, 1, &files).unwrap();
+        emit_rank_map(&run_root, &trace_root, 1, &files, &BTreeMap::new()).unwrap();
         assert_eq!(
             std::fs::read_to_string(run_root.join("rank_map.json")).unwrap(),
             r#"{"hosts":["plh0"],"runs":[[0,1,0,-1]],"sfx":[],"v":1,"x":{"0":"rank0_trace.json.gz"}}"#
         );
 
-        // No profile_logs: the analyzed ranks are still listed, hostless.
+        // No profile_logs: the analyzed ranks are still listed, with the
+        // host the trace recorded, or hostless.
         let bare_root = td.path().join("nolayout/step_1");
         let run2 = td.path().join("tree/run2");
-        emit_rank_map(&run2, &bare_root, 1, &files).unwrap();
+        emit_rank_map(&run2, &bare_root, 1, &files, &BTreeMap::new()).unwrap();
         assert_eq!(
             std::fs::read_to_string(run2.join("rank_map.json")).unwrap(),
             r#"{"hosts":[],"runs":[[0,1,-1,-1]],"sfx":[],"v":1,"x":{"0":"rank0_trace.json.gz"}}"#
+        );
+        let trace_hosts = BTreeMap::from([(0, "host-b".to_string())]);
+        emit_rank_map(&run2, &bare_root, 1, &files, &trace_hosts).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(run2.join("rank_map.json")).unwrap(),
+            r#"{"hosts":["host-b"],"runs":[[0,1,0,-1]],"sfx":[],"v":1,"x":{"0":"rank0_trace.json.gz"}}"#
         );
     }
 }
