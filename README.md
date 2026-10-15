@@ -72,6 +72,15 @@ For Kineto backend, ensure your framework exports the trace with
 Frameworks like TorchTitan already do both steps, but without them, collective
 kernels aren't properly recognized and attributed to PGs by comms_viz.
 
+## Collectives across ranks
+
+Collectives are matched across ranks by the c10d metadata (process group,
+collective, sequence number) that PyTorch's profiler attaches to their GPU
+events, and the several events of one call, e.g. a copy-engine collective's
+copies, are grouped into a single call. Observed bandwidth is the full payload
+(nccl-tests' algbw) over the shortest call duration across ranks, since every
+rank's duration includes waiting for the others.
+
 ## Custom collectives
 
 PyTorch attaches process-group metadata only to c10d collectives. comms_viz also recognizes a few other
