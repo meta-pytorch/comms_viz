@@ -31,6 +31,7 @@ use serde_json::json;
 
 use crate::analysis::BreakdownValue;
 use crate::analysis::DIAGNOSTICS_PG;
+use crate::analysis::pg_group_id;
 use crate::legacy::json::TraceEnvironment;
 use crate::trace::ProcessGroupConfig;
 
@@ -518,6 +519,53 @@ fn write_single_worker_partial(
     })
 }
 
+/// Rename process groups whose name covers more ranks than the group's size
+/// to `{name}-r{lowest rank}`, in each rank's group inventory, table keys and
+/// `pg_name` column. c10d's `split_group` names every subgroup of one split
+/// the same (e.g. TorchTitan's PP p2p groups); kept as one group, their
+/// collectives would be matched across subgroups.
+fn disambiguate_shared_group_names(results: &mut [Option<RankResult>]) -> Result<()> {
+    // Per name: every rank any rank lists, and the largest reported size.
+    let mut spans: HashMap<String, (std::collections::BTreeSet<i64>, i64)> = HashMap::new();
+    for group in results.iter().flatten().flat_map(|r| &r.process_groups) {
+        let (ranks, size) = spans.entry(group.pg_name.clone()).or_default();
+        ranks.extend(&group.ranks);
+        *size = (*size).max(group.pg_size);
+    }
+    spans.retain(|_, (ranks, size)| *size > 0 && ranks.len() > *size as usize);
+    if spans.is_empty() {
+        return Ok(());
+    }
+    for result in results.iter_mut().flatten() {
+        let mut renames: Vec<(String, String)> = Vec::new();
+        for group in &mut result.process_groups {
+            let Some(&lowest) = group.ranks.iter().min() else {
+                continue;
+            };
+            if spans.contains_key(&group.pg_name) {
+                let name = format!("{}-r{lowest}", group.pg_name);
+                renames.push((std::mem::replace(&mut group.pg_name, name.clone()), name));
+            }
+        }
+        for (key, df) in &mut result.pg_dfs {
+            if key == DIAGNOSTICS_PG {
+                continue;
+            }
+            for (old, new) in &renames {
+                let Some(axis) = key.strip_suffix(&format!("_{}", pg_group_id(old))) else {
+                    continue;
+                };
+                *key = format!("{axis}_{}", pg_group_id(new));
+                df.with_column(Column::new(
+                    "pg_name".into(),
+                    vec![new.as_str(); df.height()],
+                ))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Emit the full artifact tree for a completed run. `results` is indexed
 /// by rank; `None` = skipped rank (missing trace / timeout / error) — it
 /// contributes no rows.
@@ -528,6 +576,7 @@ pub fn emit_run(
     meta_ctx: Option<&WorkerMetaCtx>,
 ) -> Result<EmitSummary> {
     let t_emit = std::time::Instant::now();
+    disambiguate_shared_group_names(results)?;
     let combined_dir = out_root
         .join("tree")
         .join(&meta.run_id)
@@ -1433,6 +1482,68 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].ranks, vec![0, 1]);
         assert_eq!(groups[0].pg_size, 2);
+    }
+
+    #[test]
+    fn shared_group_names_split_by_rank_set() {
+        let result = |rank: i64, ranks: Vec<i64>| {
+            let df = DataFrame::new_infer_height(vec![
+                Column::new("pg_name".into(), vec!["abc"; 2]),
+                Column::new("rank".into(), vec![rank as i32; 2]),
+            ])
+            .unwrap();
+            Some(RankResult {
+                base_ns: None,
+                rank,
+                breakdown_row: Vec::new(),
+                pg_dfs: vec![("pp_abc".to_string(), df)],
+                process_groups: vec![ProcessGroupConfig {
+                    pg_name: "abc".into(),
+                    pg_desc: "pp_p2p_round_0".into(),
+                    backend_config: "cuda:nccl".into(),
+                    pg_size: 2,
+                    ranks,
+                }],
+                environment: TraceEnvironment::default(),
+            })
+        };
+        let mut results = vec![
+            result(0, vec![0, 2]),
+            result(1, vec![1, 3]),
+            result(2, vec![0, 2]),
+            result(3, vec![1, 3]),
+        ];
+        disambiguate_shared_group_names(&mut results).unwrap();
+        let names: Vec<(&str, &str)> = results
+            .iter()
+            .flatten()
+            .map(|r| (r.process_groups[0].pg_name.as_str(), r.pg_dfs[0].0.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("abc-r0", "pp_abc-r0"),
+                ("abc-r1", "pp_abc-r1"),
+                ("abc-r0", "pp_abc-r0"),
+                ("abc-r1", "pp_abc-r1"),
+            ]
+        );
+        let column = results[1].as_ref().unwrap().pg_dfs[0]
+            .1
+            .column("pg_name")
+            .unwrap();
+        assert_eq!(column.str().unwrap().get(0), Some("abc-r1"));
+        // Left alone: one rank set, and partial rank sets within the size (a
+        // rank that only knows itself, as when groups come from kernel metadata).
+        let mut same = vec![result(0, vec![0, 1]), result(1, vec![0, 1])];
+        disambiguate_shared_group_names(&mut same).unwrap();
+        assert_eq!(same[0].as_ref().unwrap().process_groups[0].pg_name, "abc");
+        let mut partial = vec![result(0, vec![0]), result(1, vec![1])];
+        disambiguate_shared_group_names(&mut partial).unwrap();
+        assert_eq!(
+            partial[1].as_ref().unwrap().process_groups[0].pg_name,
+            "abc"
+        );
     }
 
     #[test]
