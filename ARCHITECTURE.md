@@ -56,6 +56,15 @@ kernels to PGs and to match collective across ranks.
 Groups are sorted into parallelism axes (`tp`, `fsdp`, ...) using the
 mesh dimension names from DeviceMesh.
 
+DeviceMesh creates a separate process group per mesh for each axis, so a job that
+builds several meshes over the same devices can show several groups with the same
+axis and ranks. For example, TorchTitan has an FSDP storage mesh and a
+forward/backward mesh, so TP appears twice: one group carries the sequence-parallel
+all-gathers and reduce-scatters, the other the all-reduces for gradients of
+TP-replicated parameters such as norm weights. The trace doesn't record which mesh
+owns a group (every one is described as `mesh_<axis>`), so the page labels them
+`1/2`, `2/2`.
+
 ## Breakdown tab
 
 One row per rank (`breakdown.parquet`, `breakdown.csv`), from one pass over
