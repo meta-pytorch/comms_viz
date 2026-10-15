@@ -1945,9 +1945,16 @@ const pl = {
     }
     const bytes = this.payload(peers ? c.members : [hit]);
     if (bytes) {
-      tt.append(r("Payload:", `${loc(bytes)} B`),
-        r("BW (this rank):", `${this.bandwidth(bytes, call.dur).toFixed(2)} GB/s · incl. wait`));
-      if (peers) tt.append(r("BW (min dur):", `${this.bandwidth(bytes, c.quick.dur).toFixed(2)} GB/s · rank ${c.quick.rank}`));
+      tt.append(r("Payload:", `${loc(bytes)} B`));
+      const kind = peers ? this.bwKind(c) : { alg: true, bus: null };
+      if (kind.alg) {
+        tt.append(r("algbw (this rank):", `${this.bandwidth(bytes, call.dur).toFixed(2)} GB/s · incl. wait`));
+        if (peers) {
+          const alg = this.bandwidth(bytes, c.quick.dur);
+          tt.append(r("algbw (min dur):", `${alg.toFixed(2)} GB/s · rank ${c.quick.rank}`));
+          if (kind.bus != null) tt.append(r("busbw (min dur):", `${(alg * kind.bus).toFixed(2)} GB/s`));
+        }
+      }
     }
     tt.append(r("Trace ts:", `${hit.ts.toFixed(3)} μs (raw)`));
     tt.style.display = "block";
@@ -2057,14 +2064,35 @@ const pl = {
   bandwidth(bytes, durUs) {
     return durUs > 0 && bytes > 0 ? bytes / durUs / 1000 : 0; // GB/s
   },
+  // How a cohort's bandwidth is reported, by collective family: `alg` says
+  // whether algbw (full-buffer payload / time, nccl-tests' convention) means
+  // anything, `bus` is the nccl-tests factor turning algbw into busbw (data
+  // over the links per rank), or null. Neither holds where ranks move
+  // different amounts: an all-to-all with uneven splits, or rooted
+  // gather/scatter.
+  bwKind(c) {
+    const name = (c.ear.collective || "").replace(/_/g, "").toLowerCase();
+    const n = c.members.find((m) => m.groupSize > 0)?.groupSize ?? c.n;
+    if (name.includes("allreduce")) return { alg: true, bus: 2 * (n - 1) / n };
+    if (name.includes("allgather") || name.includes("reducescatter")) return { alg: true, bus: (n - 1) / n };
+    if (name.includes("alltoall")) {
+      const even = c.members.every((m) => m.inN >= 0 && m.inN === m.outN && m.inN === c.members[0].inN);
+      return even ? { alg: true, bus: (n - 1) / n } : { alg: false, bus: null };
+    }
+    if (name.includes("gather") || name.includes("scatter")) return { alg: false, bus: null };
+    if (name.includes("broadcast") || name.includes("reduce") || name === "send" || name === "recv")
+      return { alg: true, bus: 1 };
+    return { alg: true, bus: null };
+  },
   imbalance() {
     const out = [];
     for (const c of this.cohorts().list) {
       if (!this.cohortComplete(c)) continue;
       const eStart = c.ear.ts - this.minT, lStart = c.lat.ts - this.minT;
-      const duration = c.quick.dur, payload = this.payload(c.members);
+      const duration = c.quick.dur, payload = this.payload(c.members), kind = this.bwKind(c);
+      const bandwidth = kind.alg ? this.bandwidth(payload, duration) : 0;
       out.push({ seq: c.seq, originalName: c.ear.originalName, name: c.ear.collective || c.ear.name, kernel: c.ear.kernel || c.ear.name,
-        payload, duration, bandwidth: this.bandwidth(payload, duration), eStart, eRaw: c.ear.ts,
+        payload, duration, bandwidth, busbw: kind.bus != null ? bandwidth * kind.bus : 0, eStart, eRaw: c.ear.ts,
         eRank: c.ear.rank, lStart, lRaw: c.lat.ts, lRank: c.lat.rank,
         diff: c.ear.dur > 0 ? (lStart - eStart) / c.ear.dur * 100 : 0 });
     }
@@ -2338,7 +2366,7 @@ const pl = {
     const COLS = [["seq", "Seq"], ["name", "Collective"], ["kernel", "Kernel"],
       ["payload", "Payload"],
       ["duration", "Min Duration (μs)", "shortest duration across ranks for this collective"],
-      ["bandwidth", "Observed BW", "payload / min duration"],
+      ["bandwidth", "BW (algbw)"], ["busbw", "BW (busbw)"],
       ["eStart", "Earliest Start (μs)"], ["eRank", "Earliest Rank"],
       ["lStart", "Latest Start (μs)"], ["lRank", "Latest Rank"],
       ["diff", "Difference %", "(latest start - earliest start) / (earliest rank's duration) * 100"]];
@@ -2362,6 +2390,7 @@ const pl = {
         el("td", { class: "txt mono", title: r.originalName }, r.kernel),
         el("td", {}, r.payload ? `${loc(r.payload)} B` : "—"),
         el("td", {}, loc(r.duration)), el("td", {}, r.bandwidth ? `${r.bandwidth.toFixed(2)} GB/s` : "—"),
+        el("td", {}, r.busbw ? `${r.busbw.toFixed(2)} GB/s` : "—"),
         el("td", { title: `raw ${r.eRaw.toFixed(3)} μs` }, loc(r.eStart)), el("td", {}, String(r.eRank)),
         el("td", { title: `raw ${r.lRaw.toFixed(3)} μs` }, loc(r.lStart)), el("td", {}, String(r.lRank)),
         el("td", { style: "font-weight:700" }, r.diff.toFixed(2) + "%")));

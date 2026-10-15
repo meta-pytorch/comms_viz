@@ -281,6 +281,51 @@ fn payload_bytes(members: &[usize], events: &[Event]) -> f64 {
     sample.in_n.max(sample.out_n).max(0.0) * width
 }
 
+/// How a cohort's bandwidth is reported, by collective family (the page's
+/// `bwKind`): whether algbw (full-buffer payload / time, nccl-tests' convention)
+/// means anything, and the nccl-tests factor turning algbw into busbw (data over
+/// the links per rank). Neither holds where ranks move different amounts: an
+/// all-to-all with uneven splits, or rooted gather/scatter.
+fn bw_kind(members: &[usize], events: &[Event]) -> (bool, Option<f64>) {
+    let first = &events[members[0]];
+    let name: String = first
+        .collective
+        .chars()
+        .filter(|c| *c != '_')
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let n = members
+        .iter()
+        .map(|&i| events[i].group_size)
+        .find(|&size| size > 0)
+        .unwrap_or(members.len() as i64) as f64;
+    let ring = (n - 1.0) / n;
+    if name.contains("allreduce") {
+        return (true, Some(2.0 * ring));
+    }
+    if name.contains("allgather") || name.contains("reducescatter") {
+        return (true, Some(ring));
+    }
+    if name.contains("alltoall") {
+        let even = members.iter().all(|&i| {
+            let e = &events[i];
+            e.in_n >= 0.0 && e.in_n == e.out_n && e.in_n == first.in_n
+        });
+        return if even {
+            (true, Some(ring))
+        } else {
+            (false, None)
+        };
+    }
+    if name.contains("gather") || name.contains("scatter") {
+        return (false, None);
+    }
+    if name.contains("broadcast") || name.contains("reduce") || name == "send" || name == "recv" {
+        return (true, Some(1.0));
+    }
+    (true, None)
+}
+
 fn display_name(e: &Event) -> &str {
     if e.collective.is_empty() {
         &e.name
@@ -543,7 +588,8 @@ pub(crate) fn write_structured_report(data: &RunData, stem: &str, dest: &Path) -
         "op",
         "bytes",
         "dur",
-        "gbps",
+        "algbw_gbps",
+        "busbw_gbps",
         "first",
         "last",
         "t",
@@ -574,6 +620,7 @@ pub(crate) fn write_structured_report(data: &RunData, stem: &str, dest: &Path) -
             } else {
                 0.0
             };
+            let (alg, bus) = bw_kind(&c.members, events);
             let spread = lat.ts - ear.ts;
             let spread_pct = if ear.dur > 0.0 {
                 spread / ear.dur * 100.0
@@ -590,7 +637,11 @@ pub(crate) fn write_structured_report(data: &RunData, stem: &str, dest: &Path) -
                     display_name(ear).to_string(),
                     format!("{payload}"),
                     d1(quick.dur),
-                    d1(bandwidth),
+                    if alg { d1(bandwidth) } else { String::new() },
+                    match bus {
+                        Some(factor) if alg => d1(bandwidth * factor),
+                        _ => String::new(),
+                    },
                     ear.rank.to_string(),
                     lat.rank.to_string(),
                     d1(ear.ts - t0),
@@ -998,6 +1049,35 @@ mod tests {
             group_size: 2,
             step: Some(1),
         }
+    }
+
+    #[test]
+    fn bus_bandwidth_factor_by_collective() {
+        let of = |collective: &str, sizes: &[(f64, f64)]| {
+            let events: Vec<Event> = sizes
+                .iter()
+                .enumerate()
+                .map(|(rank, &(in_n, out_n))| Event {
+                    collective: collective.into(),
+                    in_n,
+                    out_n,
+                    group_size: 4,
+                    ..event(rank as i64, 0.0, "1")
+                })
+                .collect();
+            bw_kind(&(0..events.len()).collect::<Vec<_>>(), &events)
+        };
+        let even = [(8.0, 8.0); 4];
+        assert_eq!(of("allreduce", &even), (true, Some(1.5)));
+        assert_eq!(of("_allgather_base", &[(2.0, 8.0); 4]), (true, Some(0.75)));
+        assert_eq!(of("reduce_scatter", &[(8.0, 2.0); 4]), (true, Some(0.75)));
+        assert_eq!(of("all_to_all", &even), (true, Some(0.75)));
+        // Uneven splits: ranks move different amounts, so no bandwidth at all.
+        let uneven = [(8.0, 6.0), (8.0, 10.0), (8.0, 8.0), (8.0, 8.0)];
+        assert_eq!(of("all_to_all", &uneven), (false, None));
+        assert_eq!(of("gather", &even), (false, None));
+        assert_eq!(of("broadcast", &even), (true, Some(1.0)));
+        assert_eq!(of("symm_mem::barrier", &even), (true, None));
     }
 
     #[test]
