@@ -347,16 +347,48 @@ fn event_comm_type(
     )
 }
 
-fn prepare(cols: &ConvertedColumns, process_groups: &[ProcessGroupConfig]) -> Prepared {
+/// Per row: a GPU event (kernel, copy, set) whose launching call isn't in the
+/// trace. Every GPU activity carries its launch's correlation id; one with no
+/// matching CUDA runtime/driver call was launched before the profiling window
+/// opened -- typically the previous step still running on the GPU -- so it
+/// belongs to a step the trace doesn't cover. A trace with no launch records
+/// can't tell and keeps everything.
+fn launched_before_window<'a>(rows: impl Iterator<Item = (Option<&'a str>, i64)>) -> Vec<bool> {
+    // 1: GPU event, 2: launch call.
+    let rows: Vec<(u8, i64)> = rows
+        .map(|(cat, corr)| match cat {
+            Some("kernel" | "gpu_memcpy" | "gpu_memset") => (1, corr),
+            Some("cuda_runtime" | "cuda_driver") => (2, corr),
+            _ => (0, corr),
+        })
+        .collect();
+    let launches: rustc_hash::FxHashSet<i64> = rows
+        .iter()
+        .filter(|&&(kind, corr)| kind == 2 && corr > 0)
+        .map(|&(_, corr)| corr)
+        .collect();
+    if launches.is_empty() {
+        return vec![false; rows.len()];
+    }
+    rows.iter()
+        .map(|&(kind, corr)| kind == 1 && corr > 0 && !launches.contains(&corr))
+        .collect()
+}
+
+fn prepare(
+    cols: &ConvertedColumns,
+    process_groups: &[ProcessGroupConfig],
+    excluded: &[bool],
+) -> Prepared {
     let n = cols.ts.len();
     let mut keep = Vec::with_capacity(n);
     let mut name = Vec::with_capacity(n);
     let mut para = Vec::with_capacity(n);
     let mut pg_name = Vec::with_capacity(n);
     let process_group_descriptions = process_group_descriptions(process_groups);
-    for i in 0..n {
+    for (i, &skip) in excluded.iter().enumerate().take(n) {
         let Some(cat) = cols.cat(i) else { continue };
-        if cat.is_empty() {
+        if cat.is_empty() || skip {
             continue;
         }
         keep.push(i as u32);
@@ -1022,7 +1054,9 @@ pub fn process(
     process_groups: &[ProcessGroupConfig],
 ) -> Result<(BreakdownRow, PgDataFrames)> {
     let rank_info = trace_rank_info(process_groups);
-    let prep = prepare(cols, process_groups);
+    let excluded =
+        launched_before_window((0..cols.ts.len()).map(|i| (cols.cat(i), cols.correlation[i])));
+    let prep = prepare(cols, process_groups, &excluded);
     let (row, mut filt) = with_name_cache(|names| {
         let row = breakdown(cols, &prep, rank, &rank_info, names);
         let filt = filtered_kernels(cols, &prep, names);
@@ -1035,18 +1069,20 @@ pub fn process(
     filt.assign_steps(&steps);
     let diagnostics = diagnostics_df(
         rank,
-        (0..cols.ts.len()).map(|i| DiagnosticEvent {
-            cat: cols.cat(i).unwrap_or(""),
-            name: cols.name(i).unwrap_or(""),
-            ph: cols.ph(i),
-            ts: cols.ts[i],
-            dur: cols.dur[i],
-            counter_value: cols.counter_value[i],
-            annotated_collective: kernel_types::is_annotated_collective(
-                cols.collective_name(i),
-                cols.pg_name(i),
-            ),
-        }),
+        (0..cols.ts.len())
+            .filter(|&i| !excluded[i])
+            .map(|i| DiagnosticEvent {
+                cat: cols.cat(i).unwrap_or(""),
+                name: cols.name(i).unwrap_or(""),
+                ph: cols.ph(i),
+                ts: cols.ts[i],
+                dur: cols.dur[i],
+                counter_value: cols.counter_value[i],
+                annotated_collective: kernel_types::is_annotated_collective(
+                    cols.collective_name(i),
+                    cols.pg_name(i),
+                ),
+            }),
     )?;
 
     let mut pg_dfs = pg_split(&filt, rank, &rank_info)?;
@@ -1065,6 +1101,8 @@ pub fn process_view(
     process_groups: &[ProcessGroupConfig],
 ) -> Result<(BreakdownRow, PgDataFrames)> {
     let rank_info = trace_rank_info(process_groups);
+    let excluded =
+        launched_before_window((0..view.len()).map(|j| (view.cat(j), view.correlation(j))));
     let process_group_descriptions = process_group_descriptions(process_groups);
     let (row, mut filt) = with_name_cache(|names| {
         let mut acc = BreakdownAcc::new(&rank_info);
@@ -1092,10 +1130,10 @@ pub fn process_view(
             String,
         );
         let mut memo: Option<CommMemo> = None;
-        for j in 0..view.len() {
-            // prepare()'s keep filter: cat non-null, non-empty.
+        for (j, &skip) in excluded.iter().enumerate() {
+            // prepare()'s keep filter: cat non-null, non-empty, launched in the window.
             let Some(cat) = view.cat(j) else { continue };
-            if cat.is_empty() {
+            if cat.is_empty() || skip {
                 continue;
             }
             // prepare()'s first-occurrence literal rename, computed on demand.
@@ -1163,18 +1201,20 @@ pub fn process_view(
     filt.assign_steps(&steps);
     let diagnostics = diagnostics_df(
         rank,
-        (0..view.len()).map(|i| DiagnosticEvent {
-            cat: view.cat(i).unwrap_or(""),
-            name: view.name(i).unwrap_or(""),
-            ph: view.ph(i),
-            ts: view.ts(i),
-            dur: view.dur(i),
-            counter_value: view.counter_value(i),
-            annotated_collective: kernel_types::is_annotated_collective(
-                view.collective_name(i),
-                view.pg_name(i),
-            ),
-        }),
+        (0..view.len())
+            .filter(|&i| !excluded[i])
+            .map(|i| DiagnosticEvent {
+                cat: view.cat(i).unwrap_or(""),
+                name: view.name(i).unwrap_or(""),
+                ph: view.ph(i),
+                ts: view.ts(i),
+                dur: view.dur(i),
+                counter_value: view.counter_value(i),
+                annotated_collective: kernel_types::is_annotated_collective(
+                    view.collective_name(i),
+                    view.pg_name(i),
+                ),
+            }),
     )?;
     let mut pg_dfs = pg_split(&filt, rank, &rank_info)?;
     pg_dfs.push((DIAGNOSTICS_PG.to_string(), diagnostics));
@@ -1464,6 +1504,25 @@ mod process_group_tests {
                 .collect::<Vec<_>>(),
             vec!["3", "20"]
         );
+    }
+
+    #[test]
+    fn gpu_events_launched_before_the_window_are_excluded() {
+        let rows = [
+            (Some("cuda_runtime"), 10), // launch of the kernel below
+            (Some("kernel"), 10),       // launched in the window
+            (Some("kernel"), 3),        // its launch predates the window
+            (Some("gpu_memcpy"), 4),    // likewise
+            (Some("kernel"), -1),       // no correlation: can't tell, kept
+            (Some("cpu_op"), 3),        // CPU rows are never excluded
+        ];
+        assert_eq!(
+            launched_before_window(rows.into_iter()),
+            [false, false, true, true, false, false]
+        );
+        // Without any launch records nothing can be attributed: keep all.
+        let gpu_only = [(Some("kernel"), 3), (Some("gpu_memset"), 4)];
+        assert_eq!(launched_before_window(gpu_only.into_iter()), [false, false]);
     }
 
     #[test]

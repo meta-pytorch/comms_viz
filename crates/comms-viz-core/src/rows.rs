@@ -80,6 +80,9 @@ pub(crate) struct Rows {
     pub(crate) out_nelems: Vec<Option<i64>>,
     pub(crate) group_size: Vec<Option<i64>>,
     pub(crate) counter_value: Vec<Option<f64>>,
+    /// CUPTI correlation id (`args.correlation`): links a GPU event to the CPU
+    /// call that launched it. None when absent.
+    pub(crate) correlation: Vec<Option<i64>>,
 }
 
 impl Rows {
@@ -124,7 +127,8 @@ impl Rows {
             in_nelems,
             out_nelems,
             group_size,
-            counter_value
+            counter_value,
+            correlation
         );
         b
     }
@@ -153,7 +157,8 @@ impl Rows {
             in_nelems,
             out_nelems,
             group_size,
-            counter_value
+            counter_value,
+            correlation
         );
     }
 }
@@ -377,6 +382,8 @@ pub struct ConvertedColumns {
     pub out_nelems: Vec<i64>,
     pub group_size: Vec<i64>,
     pub counter_value: Vec<Option<f64>>,
+    /// -1 when absent (see `Rows::correlation`).
+    pub correlation: Vec<i64>,
 }
 
 impl ConvertedColumns {
@@ -473,6 +480,10 @@ pub(crate) fn finish_columns(rows: &mut Rows) -> ConvertedColumns {
             .map(|&i| rows.group_size[i as usize].unwrap_or(-1))
             .collect(),
         counter_value: gather_opt(&rows.counter_value, &perm),
+        correlation: perm
+            .iter()
+            .map(|&i| rows.correlation[i as usize].unwrap_or(-1))
+            .collect(),
         arena: std::mem::take(&mut rows.arena),
     }
 }
@@ -653,6 +664,7 @@ fn walk_compact(
     compact_and_append(&mut rows.out_nelems, keep, n_meta, None);
     compact_and_append(&mut rows.group_size, keep, n_meta, None);
     compact_and_append(&mut rows.counter_value, keep, n_meta, None);
+    compact_and_append(&mut rows.correlation, keep, n_meta, None);
 
     let plan = WalkPlan {
         keep: outcome.keep,
@@ -794,6 +806,12 @@ impl WalkedView {
     #[inline]
     pub fn counter_value(&self, j: usize) -> Option<f64> {
         self.rows.counter_value[self.r(j)]
+    }
+
+    /// -1 when absent (see `Rows::correlation`).
+    #[inline]
+    pub fn correlation(&self, j: usize) -> i64 {
+        self.rows.correlation[self.r(j)].unwrap_or(-1)
     }
 
     /// Arena spans of the (pg_desc, pg_name) pair. Equal spans mean equal
@@ -1048,6 +1066,9 @@ pub fn convert_pftrace_rows(tr: &crate::trace::pftrace::PfTrace) -> Result<Parse
         rows.group_size
             .push((e.group_size >= 0).then_some(e.group_size));
         rows.counter_value.push(e.counter_value);
+        // CUPTI correlation ids start at 1; 0 and -1 mean none.
+        rows.correlation
+            .push((e.correlation > 0).then_some(e.correlation));
 
         raws.push(crate::cudagraph::RawEvent {
             tid_i,

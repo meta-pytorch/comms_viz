@@ -543,6 +543,7 @@ fn parse_rows_serde(root: &SValue) -> Rows {
         let mut collective_name = None;
         let (mut in_nelems, mut out_nelems, mut group_size, mut counter_value) =
             (None, None, None, None);
+        let mut correlation = None;
 
         if let Some(a) = args_obj {
             stream = a.get("stream").and_then(s_coerce_int);
@@ -560,6 +561,7 @@ fn parse_rows_serde(root: &SValue) -> Rows {
             out_nelems = a.get("Out msg nelems").and_then(s_coerce_int);
             group_size = a.get("Group size").and_then(s_coerce_int);
             counter_value = a.get("").and_then(s_coerce_float);
+            correlation = a.get("correlation").and_then(s_coerce_int);
         }
 
         let keep_comm = name.is_some_and(|s| crate::comm::is_comm(rows.get(s)))
@@ -593,6 +595,8 @@ fn parse_rows_serde(root: &SValue) -> Rows {
         rows.out_nelems.push(out_nelems);
         rows.group_size.push(group_size);
         rows.counter_value.push(counter_value);
+        // CUPTI correlation ids start at 1; 0 means none.
+        rows.correlation.push(correlation.filter(|c| *c > 0));
     }
 
     rows
@@ -636,6 +640,7 @@ fn parse_rows_simd(root: &BValue) -> Rows {
         let mut collective_name = None;
         let (mut in_nelems, mut out_nelems, mut group_size, mut counter_value) =
             (None, None, None, None);
+        let mut correlation = None;
 
         if let Some(a) = args_obj {
             stream = a.get("stream").and_then(coerce_int);
@@ -653,6 +658,7 @@ fn parse_rows_simd(root: &BValue) -> Rows {
             out_nelems = a.get("Out msg nelems").and_then(coerce_int);
             group_size = a.get("Group size").and_then(coerce_int);
             counter_value = a.get("").and_then(coerce_float);
+            correlation = a.get("correlation").and_then(coerce_int);
         }
 
         let keep_comm = name.is_some_and(|s| crate::comm::is_comm(rows.get(s)))
@@ -686,6 +692,8 @@ fn parse_rows_simd(root: &BValue) -> Rows {
         rows.out_nelems.push(out_nelems);
         rows.group_size.push(group_size);
         rows.counter_value.push(counter_value);
+        // CUPTI correlation ids start at 1; 0 means none.
+        rows.correlation.push(correlation.filter(|c| *c > 0));
     }
 
     rows
@@ -1018,6 +1026,7 @@ struct EvCap<'a> {
     out_nelems: Option<Sc<'a>>,
     group_size: Option<Sc<'a>>,
     counter_value: Option<Sc<'a>>,
+    correlation: Option<Sc<'a>>,
     aname: Option<Sc<'a>>,
     gnid: Option<Sc<'a>>,
 }
@@ -1035,6 +1044,7 @@ impl EvCap<'_> {
         self.out_nelems = None;
         self.group_size = None;
         self.counter_value = None;
+        self.correlation = None;
         self.aname = None;
         self.gnid = None;
     }
@@ -1118,6 +1128,7 @@ fn scan_args<'a, const FIRST_WINS: bool>(
             b"Out msg nelems" => setk!(cap.out_nelems),
             b"Group size" => setk!(cap.group_size),
             b"" => setk!(cap.counter_value),
+            b"correlation" => setk!(cap.correlation),
             b"name" => setk!(cap.aname),
             b"graph node id" => setk!(cap.gnid),
             _ => skip_value(d, j)?,
@@ -1270,6 +1281,9 @@ fn push_row(cap: &EvCap, rows: &mut Rows, raws: Option<&mut Vec<crate::cudagraph
     rows.group_size.push(cap.group_size.and_then(sc_coerce_int));
     rows.counter_value
         .push(cap.counter_value.and_then(sc_coerce_float));
+    // CUPTI correlation ids start at 1; 0 means none.
+    rows.correlation
+        .push(cap.correlation.and_then(sc_coerce_int).filter(|c| *c > 0));
 
     // Raw walk view (`tree_walks` field semantics) — walk callers only.
     let Some(raws) = raws else { return };
