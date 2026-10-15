@@ -1917,7 +1917,7 @@ const pl = {
     }
     for (const [label, value] of [["Source rank:", hit.src], ["Destination rank:", hit.dst],
       ["Process group:", hit.pgId], ["Replica:", hit.replica], ["Elements:", hit.nelems],
-      ["Dtype:", hit.dtype], ["Sequence ID:", hit.sequence], ["Graph:", hit.graph], ["Node:", hit.node]])
+      ["Dtype:", hit.dtype], ["Seq:", hit.sequence], ["Graph:", hit.graph], ["Node:", hit.node]])
       if (value != null) tt.append(r(label, value));
     // Peer stats for this kernel's cohort: eyeballing the straggler across
     // a few thousand rows is what the offline analysis was for, so name it
