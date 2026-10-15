@@ -929,7 +929,8 @@ function renderPgSearch() {
       box.append(el("div", { class: "hd" }, `Rank IDs (${loc(ranks.length)})`));
       const wrap = el("div", { class: "rankbtns" });
       for (const rk of ranks.slice(0, 50)) {
-        wrap.append(el("span", { class: "rk" + (analyzed(rk) ? "" : " off") }, String(rk)));
+        wrap.append(el("span", { class: "rk" + (analyzed(rk) ? "" : " off"),
+          onclick: () => pgCalcSet(String(rk)) }, String(rk)));
       }
       if (ranks.length > 50) wrap.append(el("span", { class: "note" }, `…+${ranks.length - 50}`));
       box.append(wrap);
@@ -2457,6 +2458,7 @@ const tr = {
         const title = `Rank ${r.rank} on ${h.host || "unknown host"}` + (r.file ? `\n${r.file}` : "");
         body.append(el("span", {
           class: "rk" + (analyzed(r.rank) ? "" : " off") + (hit ? " hit" : ""), title,
+          onclick: () => pgCalcSet(String(r.rank)),
         }, String(r.rank)));
       }
       const card = el("div", { class: "host" },
