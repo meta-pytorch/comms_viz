@@ -72,7 +72,9 @@ def pg_hash(text: str) -> str:
 
 
 class Mesh:
-    def __init__(self, dims: dict[str, int], ep: int, gpus_per_node: int):
+    def __init__(
+        self, dims: dict[str, int], ep: int, gpus_per_node: int, p2p_unique_names: bool = False
+    ):
         self.dims = {a: dims.get(a, 1) for a in AXES}
         self.shape = [self.dims[a] for a in AXES]
         self.world = math.prod(self.shape)
@@ -101,7 +103,7 @@ class Mesh:
         # split_group gives all subgroups of one p2p round the same name.
         self.names: dict[str, list[str]] = {}
         for key, (desc, groups) in self.groups.items():
-            if key.startswith("pp_p2p"):
+            if key.startswith("pp_p2p") and not p2p_unique_names:
                 self.names[key] = [pg_hash(desc)] * len(groups)
             else:
                 self.names[key] = [pg_hash(f"{key}:{g[0]}:{len(g)}") for g in groups]
@@ -467,6 +469,9 @@ def main() -> None:
     ap.add_argument("--custom-kernels", action="store_true",
                     help="add an unannotated HybridEP-style kernel per expert compute")
     ap.add_argument("--counters", action="store_true", help="emit GPU counter samples")
+    ap.add_argument("--p2p-unique-names", action="store_true",
+                    help="name each pipeline p2p pair's group uniquely, as PyTorch did before "
+                    "split_group, instead of one name per round")
     ap.add_argument("--counter-interval-us", type=float, default=1000.0)
     args = ap.parse_args()
 
@@ -474,7 +479,7 @@ def main() -> None:
     unknown = set(dims) - set(AXES)
     if unknown:
         raise ValueError(f"unknown mesh axes {sorted(unknown)}; use {AXES}")
-    mesh = Mesh(dims, args.ep, args.gpus_per_node)
+    mesh = Mesh(dims, args.ep, args.gpus_per_node, args.p2p_unique_names)
     faults = sanitize_faults(args, mesh)
     ops = build_schedule(mesh, args.layers, args.microbatches)
     sim = Sim(mesh, ops, faults, args.seed)
