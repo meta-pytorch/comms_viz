@@ -228,9 +228,9 @@ fn load_run_data(tree: &ValidatedTree) -> Result<RunData> {
         &status_json,
         crate::diagnostics::any_sequence(&per_pg_all)?,
     ));
-    warnings.extend(crate::diagnostics::annotation_warnings(
-        &crate::diagnostics::read(&per_pg_all)?,
-    ));
+    let diagnostics = crate::diagnostics::read(&per_pg_all)?;
+    warnings.extend(crate::diagnostics::step_warnings(&diagnostics));
+    warnings.extend(crate::diagnostics::annotation_warnings(&diagnostics));
 
     Ok(RunData {
         run_id: tree.run_id.clone(),

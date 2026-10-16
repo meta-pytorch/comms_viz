@@ -100,6 +100,8 @@ pub(crate) struct Activity {
     /// NCCL kernel time, and the part without process-group metadata (us).
     pub nccl_us: f64,
     pub nccl_unannotated_us: f64,
+    /// ProfilerStep range the rank's capture covers; None without markers.
+    pub steps: Option<(i64, i64)>,
 }
 
 impl Activity {
@@ -175,6 +177,10 @@ fn from_path(path: &Path) -> Result<Diagnostics> {
                 other_comm_unannotated: num(get("other_comm_unannotated", row)) as u64,
                 nccl_us: num(get("nccl_us", row)),
                 nccl_unannotated_us: num(get("nccl_unannotated_us", row)),
+                steps: match (get("step_min", row), get("step_max", row)) {
+                    ("", _) | (_, "") => None,
+                    (lo, hi) => Some((num(lo) as i64, num(hi) as i64)).filter(|s| s.0 >= 0),
+                },
             });
         }
     }
@@ -257,11 +263,44 @@ pub(crate) fn annotation_warnings(diag: &Diagnostics) -> Vec<String> {
          {total} NCCL kernels, {share:.0}% of their NCCL kernel time; ranks {}). Those \
          kernels count as communication time but are on no group timeline and in no \
          cross-rank statistic. Common causes: p2p from batch_isend_irecv, which PyTorch does \
-         not annotate, or CUDA-graph replays whose capture annotations did not resolve (see \
-         README, CUDA graphs).",
+         not annotate; NCCL called directly instead of through c10d (e.g. DeepSpeed \
+         DeepCompile, vLLM's PyNccl); or CUDA-graph replays whose capture annotations did not \
+         resolve (see README, CUDA graphs).",
         flagged.len(),
         diag.activity.len(),
         ranks_short(&ranks, 20)
+    )]
+}
+
+/// The profiler steps ranks captured, as text per distinct range.
+pub(crate) fn step_label(steps: (i64, i64)) -> String {
+    if steps.0 == steps.1 {
+        format!("step {}", steps.0)
+    } else {
+        format!("steps {}-{}", steps.0, steps.1)
+    }
+}
+
+/// Ranks whose captures cover different ProfilerSteps: their collectives
+/// never pair up, so cross-rank statistics silently come out empty.
+pub(crate) fn step_warnings(diag: &Diagnostics) -> Vec<String> {
+    let mut by_steps: std::collections::BTreeMap<(i64, i64), Vec<i64>> = Default::default();
+    for a in &diag.activity {
+        if let Some(steps) = a.steps {
+            by_steps.entry(steps).or_default().push(a.rank);
+        }
+    }
+    if by_steps.len() < 2 {
+        return Vec::new();
+    }
+    let parts: Vec<String> = by_steps
+        .iter()
+        .map(|(steps, ranks)| format!("{} on ranks {}", step_label(*steps), ranks_short(ranks, 8)))
+        .collect();
+    vec![format!(
+        "Ranks captured different profiler steps ({}). Collectives of different steps don't \
+         match across ranks, so imbalance, straggler and bandwidth statistics miss them.",
+        parts.join("; ")
     )]
 }
 
@@ -298,15 +337,15 @@ pub(crate) fn coverage_warnings(status: &serde_json::Value, any_sequence: bool) 
     let total = status["ranks"]["total"].as_i64().unwrap_or(0);
     if total > processed {
         out.push(format!(
-            "Only {processed} of {total} ranks were analyzed. Group sizes, stragglers and \
-             outliers cover only those ranks."
+            "Only {processed} of {total} ranks were analyzed (the others' traces are missing \
+             or failed to parse). Group sizes, stragglers and outliers cover only those ranks."
         ));
     }
     if !any_sequence {
         out.push(
-            "No collective kernel carries a c10d sequence number (PyTorch before 2.12 does \
-             not record them), so no collective is matched across ranks: no imbalance, \
-             straggler or bandwidth statistics."
+            "No collective kernel carries a c10d sequence number, so no collective is matched \
+             across ranks: no imbalance, straggler or bandwidth statistics. PyTorch before 2.12 \
+             records none; some collectives (e.g. symm_mem ops) never have one."
                 .to_string(),
         );
     }
@@ -342,6 +381,7 @@ mod tests {
             other_comm_unannotated: 0,
             nccl_us: nccl as f64,
             nccl_unannotated_us: bare as f64,
+            steps: None,
         };
         let diag = Diagnostics {
             activity: vec![

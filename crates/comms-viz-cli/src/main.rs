@@ -183,7 +183,7 @@ fn main() -> Result<()> {
             .trace_root
             .clone()
             .ok_or_else(|| anyhow::anyhow!("--convert-pftrace needs --trace-root"))?;
-        return analyze(&args, trace_root, "local-run");
+        return analyze(&args, trace_root, "local-run").map(|_| ());
     }
     let out = args
         .out
@@ -204,12 +204,20 @@ fn main() -> Result<()> {
     };
 
     let run_id = resolve_run_id(&out, args.run_id.as_deref(), args.overwrite)?;
-    analyze(&args, trace_root, &run_id)?;
-    publish::render_local(&out, Some(&run_id), targets)
+    let errors = analyze(&args, trace_root, &run_id)?;
+    // Ranks that failed (e.g. a truncated trace) don't block the reports of
+    // the others, which say how many ranks they cover; the exit status still
+    // reports the failure.
+    publish::render_local(&out, Some(&run_id), targets)?;
+    if errors > 0 {
+        anyhow::bail!("{errors} rank(s) failed analysis");
+    }
+    Ok(())
 }
 
-/// Analyze one trace directory into `--out` under `run_id`.
-fn analyze(args: &Args, trace_root: PathBuf, run_id: &str) -> Result<()> {
+/// Analyze one trace directory into `--out` under `run_id`; returns how
+/// many ranks failed.
+fn analyze(args: &Args, trace_root: PathBuf, run_id: &str) -> Result<usize> {
     let annotation_mode = match AnnotationMode::parse(&args.annotations)? {
         AnnotationMode::Auto => discovery::detect_annotation_mode(&trace_root),
         explicit => explicit,
@@ -228,7 +236,8 @@ fn analyze(args: &Args, trace_root: PathBuf, run_id: &str) -> Result<()> {
             out_dir,
             threads,
             annotation_mode,
-        });
+        })
+        .map(|_| 0);
     }
 
     let out_root = args
@@ -306,10 +315,10 @@ fn analyze(args: &Args, trace_root: PathBuf, run_id: &str) -> Result<()> {
     };
     show("skipped", &summary.skipped_ranks);
     show("errored", &summary.errored_ranks);
-    if summary.errors > 0 {
+    if summary.errors > 0 && summary.processed == 0 {
         anyhow::bail!("{} rank(s) failed analysis", summary.errors);
     }
-    Ok(())
+    Ok(summary.errors as usize)
 }
 
 #[cfg(test)]

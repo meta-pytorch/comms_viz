@@ -869,6 +869,7 @@ pub const PM_STATS: [&str; 9] = ["n", "min", "p10", "p50", "mean", "p90", "p99",
 /// outweigh every other table combined.
 fn diagnostics_df<'a>(
     rank: i64,
+    steps: &[(i64, f64, f64)],
     events: impl Iterator<Item = DiagnosticEvent<'a>>,
 ) -> Result<(DataFrame, Option<DataFrame>)> {
     let mut gpu = Vec::new();
@@ -952,11 +953,12 @@ fn diagnostics_df<'a>(
         col[0] = v;
         col
     };
-    let first_only_u = |v: u64| {
+    let first_only_i = |v: i64| {
         let mut col = vec![0i64; n];
-        col[0] = v as i64;
+        col[0] = v;
         col
     };
+    let first_only_u = |v: u64| first_only_i(v as i64);
     let mut columns = vec![
         Column::new("kind".into(), kind),
         Column::new("rank".into(), vec![rank as i32; n]),
@@ -970,6 +972,15 @@ fn diagnostics_df<'a>(
         Column::new("other_comm_unannotated".into(), first_only_u(other_bare)),
         Column::new("nccl_us".into(), first_only(nccl_us)),
         Column::new("nccl_unannotated_us".into(), first_only(nccl_bare_us)),
+        // The ProfilerStep numbers the capture covers (-1: no step markers).
+        Column::new(
+            "step_min".into(),
+            first_only_i(steps.iter().map(|s| s.0).min().unwrap_or(-1)),
+        ),
+        Column::new(
+            "step_max".into(),
+            first_only_i(steps.iter().map(|s| s.0).max().unwrap_or(-1)),
+        ),
     ];
     for (name, col) in PM_STATS.iter().zip(stats) {
         columns.push(Column::new((*name).into(), col));
@@ -1177,6 +1188,7 @@ pub fn process(
     filt.assign_steps(&steps);
     let (diagnostics, bins) = diagnostics_df(
         rank,
+        &steps,
         (0..cols.ts.len())
             .filter(|&i| !excluded[i])
             .map(|i| DiagnosticEvent {
@@ -1315,6 +1327,7 @@ pub fn process_view(
     filt.assign_steps(&steps);
     let (diagnostics, bins) = diagnostics_df(
         rank,
+        &steps,
         (0..view.len())
             .filter(|&i| !excluded[i])
             .map(|i| DiagnosticEvent {

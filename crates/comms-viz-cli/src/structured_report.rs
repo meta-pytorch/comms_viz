@@ -513,13 +513,14 @@ struct GroupSummary {
     /// Per rank, kernel time of the calls left out of matching (no sequence
     /// or p2p), including time waiting for the peer.
     unmatched_us: Vec<(i64, f64)>,
-    /// The most common profiler step of the group's kernels.
-    step: Option<i64>,
     complete: usize,
     incomplete: usize,
     spreads: Vec<f64>,
     /// Bus bandwidth (GB/s) of complete cohorts, by collective.
     busbw: BTreeMap<String, Vec<f64>>,
+    /// Complete cohorts without a bandwidth because ranks move different
+    /// amounts (uneven all-to-all, rooted gather/scatter), by collective.
+    no_bw: BTreeMap<String, usize>,
     worst: Vec<WorstCohort>,
     arrivals: Vec<(i64, Arrivals)>,
 }
@@ -551,17 +552,11 @@ fn summarize_group(index: usize, stem: &str, axis: &str, raw: &[Event]) -> Group
             }
             by_rank.into_iter().collect()
         },
-        step: {
-            let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
-            for s in raw.iter().filter_map(|e| e.step) {
-                *counts.entry(s).or_default() += 1;
-            }
-            counts.into_iter().max_by_key(|(_, n)| *n).map(|(s, _)| s)
-        },
         complete: 0,
         incomplete: 0,
         spreads: Vec::new(),
         busbw: BTreeMap::new(),
+        no_bw: BTreeMap::new(),
         worst: Vec::new(),
         arrivals: Vec::new(),
     };
@@ -576,7 +571,14 @@ fn summarize_group(index: usize, stem: &str, axis: &str, raw: &[Event]) -> Group
         let spread = lat.ts - ear.ts;
         summary.spreads.push(spread);
         let payload = payload_bytes(&c.members, events);
-        if let (true, Some(factor)) = bw_kind(&c.members, events) {
+        let kind = bw_kind(&c.members, events);
+        if !kind.0 {
+            *summary
+                .no_bw
+                .entry(display_name(ear).to_string())
+                .or_default() += 1;
+        }
+        if let (true, Some(factor)) = kind {
             if quick.dur > 0.0 && payload >= MIN_BW_BYTES {
                 summary
                     .busbw
@@ -796,6 +798,12 @@ fn build_summary(
                 "pg": groups[i].stem,
             })
         };
+        let mut no_bw: BTreeMap<&str, usize> = BTreeMap::new();
+        for g in &gs {
+            for (op, n) in &g.no_bw {
+                *no_bw.entry(op).or_default() += n;
+            }
+        }
         axis_docs.push(json!({
             "axis": axis,
             "groups": gs.len(),
@@ -811,6 +819,7 @@ fn build_summary(
             },
             "start_spread_us": dist(gs.iter().flat_map(|g| g.spreads.iter().copied()).collect()),
             "busbw_gbps": busbw_all.into_iter().map(|(op, v)| (op.to_string(), bw_dist(v))).collect::<serde_json::Map<_, _>>(),
+            "bandwidth_not_reported": no_bw,
             "worst_collectives": worst.iter().take(TOP).map(|w| json!({
                 "group": aliases[w.group],
                 "step": w.step,
@@ -982,12 +991,17 @@ fn build_summary(
         .map(|(rank, _, _)| rank)
         .collect();
     let slow_rank_set: HashSet<i64> = slow_ranks.iter().map(|(r, _, _)| *r).collect();
-    let lost_set: HashSet<i64> = diag
+    // A tag only informs while it singles ranks out: when most ranks lose
+    // metadata (e.g. a framework calling NCCL directly), it says nothing.
+    let mut lost_set: HashSet<i64> = diag
         .activity
         .iter()
         .filter(|a| a.loses_pg_metadata())
         .map(|a| a.rank)
         .collect();
+    if 2 * lost_set.len() > diag.activity.len() {
+        lost_set.clear();
+    }
     let straggler_docs: Vec<serde_json::Value> = stragglers
         .iter()
         .take(TOP_RANKS)
@@ -1044,6 +1058,18 @@ fn build_summary(
             .total_cmp(&lost_share(a))
             .then(a.rank.cmp(&b.rank))
     });
+    // The ProfilerSteps the capture covers, from the ranks' step markers;
+    // else the trace directory name (step_N).
+    let step_ranges: BTreeSet<(i64, i64)> = diag.activity.iter().filter_map(|a| a.steps).collect();
+    let steps_text = match step_ranges.len() {
+        0 => data
+            .metadata_json
+            .as_ref()
+            .and_then(|m| m["capture"]["step"].as_i64())
+            .map_or("step unknown".to_string(), |s| format!("step {s}")),
+        1 => crate::diagnostics::step_label(*step_ranges.iter().next().expect("one range")),
+        _ => "different steps per rank (see warnings)".to_string(),
+    };
     let unmatched_dist = {
         let mut by_rank: HashMap<i64, f64> = HashMap::new();
         for g in groups {
@@ -1063,17 +1089,7 @@ fn build_summary(
         "run": {
             "name": run_name,
             "run_id": data.run_id,
-            "step": data
-                .metadata_json
-                .as_ref()
-                .and_then(|m| m["capture"]["step"].as_i64())
-                .or_else(|| {
-                    let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
-                    for s in groups.iter().filter_map(|g| g.step) {
-                        *counts.entry(s).or_default() += 1;
-                    }
-                    counts.into_iter().max_by_key(|(_, n)| *n).map(|(s, _)| s)
-                }),
+            "steps": steps_text,
             "ranks": data.status_json["ranks"]["processed"],
             "world_size": data.status_json["ranks"]["total"],
             "hosts": if ranks_per_host.is_empty() { json!(null) } else { json!(ranks_per_host.len()) },
@@ -1146,12 +1162,12 @@ fn readme(s: &serde_json::Value) -> String {
     let _ = writeln!(out, "# comms_viz summary: {}\n", f(&run["name"]));
     let _ = writeln!(
         out,
-        "run id `{}`, step {}, {} of {} ranks on {} hosts, {} process groups. Times are us, \
+        "run id `{}`, {}, {} of {} ranks on {} hosts, {} process groups. Times are us, \
          bandwidth GB/s (nccl-tests busbw). Every table is a top-{TOP} or a distribution; \
          `summary.json` has the same content. Rank lists use `a-b` for ranges and `a-b:s` \
          for every s-th rank.\n",
         f(&run["run_id"]),
-        f(&run["step"]),
+        f(&run["steps"]),
         f(&run["ranks"]),
         f(&run["world_size"]),
         f(&run["hosts"]),
@@ -1190,7 +1206,8 @@ fn readme(s: &serde_json::Value) -> String {
     }
     let _ = writeln!(
         out,
-        "- Other communication kernels (HybridEP, DeepEP, ...), never annotated: {}",
+        "- Communication kernels outside c10d (HybridEP, DeepEP, vLLM custom all-reduce, \
+         ...), which never carry its metadata: {}",
         f(&q["other_comm_kernels_without_pg_metadata"])
     );
     let _ = writeln!(
@@ -1411,6 +1428,21 @@ fn readme(s: &serde_json::Value) -> String {
                 );
             }
             out.push('\n');
+        }
+        if let Some(no_bw) = a["bandwidth_not_reported"]
+            .as_object()
+            .filter(|m| !m.is_empty())
+        {
+            let ops = no_bw
+                .iter()
+                .map(|(op, n)| format!("{op} ({} collectives)", f(n)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(
+                out,
+                "No bandwidth for {ops}: ranks move different amounts (uneven all-to-all, or \
+                 rooted gather/scatter), so no single payload over time describes them.\n"
+            );
         }
         let slow = a["slowest_groups"].as_array().cloned().unwrap_or_default();
         if !slow.is_empty() {

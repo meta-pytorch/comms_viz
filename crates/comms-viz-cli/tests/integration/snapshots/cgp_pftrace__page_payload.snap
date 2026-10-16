@@ -178,7 +178,7 @@ expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
       "diagnostics",
       [
         0,
-        244
+        263
       ]
     ],
     [
@@ -309,6 +309,6 @@ expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
     "workers_done": 4
   },
   "warnings": [
-    "No collective kernel carries a c10d sequence number (PyTorch before 2.12 does not record them), so no collective is matched across ranks: no imbalance, straggler or bandwidth statistics."
+    "No collective kernel carries a c10d sequence number, so no collective is matched across ranks: no imbalance, straggler or bandwidth statistics. PyTorch before 2.12 records none; some collectives (e.g. symm_mem ops) never have one."
   ]
 }

@@ -54,6 +54,13 @@ pub fn extra_comm_kernel_patterns() -> &'static [(&'static str, Vec<&'static str
                     // --tp-comm-overlap): kuserbuffers_pushsend/pushrecv,
                     // userbuffers_*_inplace_gpu_mc_ag/rs.
                     "userbuffers",
+                    // Inference all-reduce kernels outside NCCL: vLLM custom
+                    // all-reduce, FlashInfer / TRT-LLM one- and two-shot.
+                    "cross_device_reduce",
+                    "trtllm_mnnvl_allreduce",
+                    "trtllm_allreduce",
+                    "oneshotAllreduce",
+                    "twoshotAllreduce",
                 ]
                 .into_iter()
                 .chain(shared.iter().copied())
@@ -178,6 +185,13 @@ mod tests {
             KT_COMMUNICATION
         );
         assert_eq!(get_kernel_type("_triton_all_to_all_fwd"), KT_COMMUNICATION);
+        for name in [
+            "void userbuffers_fp16_sum_inplace_gpu_mc_rs<2>(int, int, int, int, int, int, void**, int, void*, float, uint4*, int)",
+            "void flashinfer::trtllm_mnnvl_allreduce::oneshotAllreduceFusionKernel<__nv_bfloat16>(...)",
+            "void vllm::cross_device_reduce_1stage<__nv_bfloat16, 8>(...)",
+        ] {
+            assert_eq!(get_kernel_type(name), KT_COMMUNICATION, "{name}");
+        }
         assert_eq!(
             get_kernel_type(
                 "kernel_cutlass_kernel_opskernelssymm_memall_gather_AllGatherKernel_object"
@@ -230,13 +244,15 @@ mod tests {
         assert_eq!(all[6], "symm_memall_gather_AllGatherKernel");
         assert_eq!(all[7], "symm_memreduce_scatter_ReduceScatterKernel");
         assert_eq!(all[8], "userbuffers");
-        assert_eq!(all[9], "_triton_symm_mem_barrier");
-        assert_eq!(all[10], "symmetric_memory::barrier_kernel");
-        assert_eq!(all[11], "_triton_all_to_all_");
-        assert_eq!(all[12], "hybrid_ep::dispatch_kernel");
-        assert_eq!(all[23], "deep_ep::internode");
-        assert_eq!(all[24], "_reduce_scatter");
-        assert_eq!(all[25], "_all_gather");
-        assert_eq!(all.len(), 26);
+        assert_eq!(all[9], "cross_device_reduce");
+        assert_eq!(all[13], "twoshotAllreduce");
+        assert_eq!(all[14], "_triton_symm_mem_barrier");
+        assert_eq!(all[15], "symmetric_memory::barrier_kernel");
+        assert_eq!(all[16], "_triton_all_to_all_");
+        assert_eq!(all[17], "hybrid_ep::dispatch_kernel");
+        assert_eq!(all[28], "deep_ep::internode");
+        assert_eq!(all[29], "_reduce_scatter");
+        assert_eq!(all[30], "_all_gather");
+        assert_eq!(all.len(), 31);
     }
 }
