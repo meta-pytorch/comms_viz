@@ -369,6 +369,42 @@ mod tests {
     }
 
     #[test]
+    fn mismatched_steps_are_flagged() {
+        let at = |rank, steps| Activity {
+            rank,
+            gpu: 0.0,
+            compute: 0.0,
+            cpu: 0.0,
+            window: 0.0,
+            nccl_kernels: 0,
+            nccl_unannotated: 0,
+            other_comm_unannotated: 0,
+            nccl_us: 0.0,
+            nccl_unannotated_us: 0.0,
+            steps,
+        };
+        let diag = |activity| Diagnostics {
+            activity,
+            counters: Vec::new(),
+        };
+        let same = diag(vec![at(0, Some((5, 5))), at(1, Some((5, 5))), at(2, None)]);
+        assert!(step_warnings(&same).is_empty());
+        let skewed = diag(vec![
+            at(0, Some((5, 5))),
+            at(1, Some((5, 5))),
+            at(2, Some((6, 6))),
+        ]);
+        let w = step_warnings(&skewed);
+        assert_eq!(w.len(), 1);
+        assert!(
+            w[0].contains("step 5 on ranks 0,1; step 6 on ranks 2"),
+            "{}",
+            w[0]
+        );
+        assert_eq!(step_label((4, 6)), "steps 4-6");
+    }
+
+    #[test]
     fn annotation_loss_is_flagged_per_rank() {
         let activity = |rank, nccl, bare| Activity {
             rank,
