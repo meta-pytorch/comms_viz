@@ -187,46 +187,54 @@ fn write_parquet_bytes(df: &mut DataFrame) -> Result<Vec<u8>> {
         .filter(|b| !b.is_empty())
         .collect();
     let heights: Vec<u64> = batches.iter().map(|b| b.len() as u64).collect();
-    let row_groups: Vec<Vec<Vec<CompressedPage>>> =
-        polars_core::runtime::THREAD_POOL.install(|| {
-            batches
-                .into_par_iter()
-                .map(|batch| {
-                    batch
-                        .columns()
-                        .iter()
-                        .zip(fields.iter())
-                        .zip(encodings.iter())
-                        .map(|((array, type_), col_encodings)| {
-                            let leaves =
-                                array_to_columns(array, type_.clone(), options, col_encodings)
-                                    .map_err(|e| anyhow::anyhow!("parquet encode: {e}"))?;
-                            leaves
-                                .into_iter()
-                                .map(|pages| {
-                                    Compressor::new_from_vec(
-                                        pages.map(|r| {
-                                            r.map_err(|e| {
-                                            polars_parquet::read::ParquetError::FeatureNotSupported(
-                                                format!("reraised in comms_viz: {e}"),
-                                            )
-                                        })
-                                        }),
-                                        options.compression,
-                                        vec![],
+    let encode = |i: usize| {
+        let batch = &batches[i];
+        batch
+            .columns()
+            .iter()
+            .zip(fields.iter())
+            .zip(encodings.iter())
+            .map(|((array, type_), col_encodings)| {
+                let leaves = array_to_columns(array, type_.clone(), options, col_encodings)
+                    .map_err(|e| anyhow::anyhow!("parquet encode: {e}"))?;
+                leaves
+                    .into_iter()
+                    .map(|pages| {
+                        Compressor::new_from_vec(
+                            pages.map(|r| {
+                                r.map_err(|e| {
+                                    polars_parquet::read::ParquetError::FeatureNotSupported(
+                                        format!("reraised in comms_viz: {e}"),
                                     )
-                                    .collect::<std::result::Result<Vec<CompressedPage>, _>>()
-                                    .map_err(|e| anyhow::anyhow!("parquet compress: {e}"))
                                 })
-                                .collect::<Result<Vec<_>>>()
-                        })
-                        .try_fold(Vec::new(), |mut acc, cols| {
-                            acc.extend(cols?);
-                            Ok::<_, anyhow::Error>(acc)
-                        })
-                })
+                            }),
+                            options.compression,
+                            vec![],
+                        )
+                        .collect::<std::result::Result<Vec<CompressedPage>, _>>()
+                        .map_err(|e| anyhow::anyhow!("parquet compress: {e}"))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .try_fold(Vec::new(), |mut acc, cols| {
+                acc.extend(cols?);
+                Ok::<_, anyhow::Error>(acc)
+            })
+    };
+    // A single row group (most per-PG frames) is encoded on this thread.
+    // Handing it to the polars pool from a rayon worker makes the worker
+    // steal other per-PG jobs while it waits, nesting them on its stack: with
+    // ~100k groups (45k ranks with PP) that overflowed the stack.
+    let row_groups: Vec<Vec<Vec<CompressedPage>>> = if batches.len() <= 1 {
+        (0..batches.len()).map(encode).collect::<Result<Vec<_>>>()?
+    } else {
+        polars_core::runtime::THREAD_POOL.install(|| {
+            (0..batches.len())
+                .into_par_iter()
+                .map(encode)
                 .collect::<Result<Vec<_>>>()
-        })?;
+        })?
+    };
 
     let mut buf = Vec::new();
     {

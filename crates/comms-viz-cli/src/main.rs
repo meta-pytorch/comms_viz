@@ -168,6 +168,15 @@ fn resolve_run_id(out: &Path, requested: Option<&str>, overwrite: bool) -> Resul
 }
 
 fn main() -> Result<()> {
+    // Larger worker stacks for the rayon and polars pools, which take the
+    // std default unless RUST_MIN_STACK is set (read at the first spawn, so
+    // this must run before any pool starts). A worker that waits on the
+    // other pool runs stolen jobs on its own stack meanwhile, and with ~100k
+    // process groups (45k ranks with PP) the default 2 MiB overflowed.
+    // Stacks are reserved, not committed, so this costs no memory up front.
+    if std::env::var_os("RUST_MIN_STACK").is_none() {
+        std::env::set_var("RUST_MIN_STACK", (64usize << 20).to_string());
+    }
     let args = Args::parse();
     if args.convert_pftrace.is_some() {
         let trace_root = args
