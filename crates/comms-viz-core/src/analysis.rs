@@ -826,10 +826,6 @@ struct DiagnosticEvent<'a> {
     annotated_collective: bool,
 }
 
-/// GPU counter that Cuspy samples once per kernel rather than over time, so
-/// its distribution describes the kernel mix, not the GPU's state.
-const PER_KERNEL_COUNTER: &str = "Cycles (Current Kernel)";
-
 /// Summary statistics of one GPU counter on one rank, in `PM_STATS` order.
 fn counter_stats(values: &mut [f64]) -> [f64; 9] {
     values.sort_by(f64::total_cmp);
@@ -899,7 +895,7 @@ fn diagnostics_df<'a>(
         if matches!(event.cat, "cpu_op" | "cuda_runtime" | "cuda_driver") {
             cpu.push(span);
         }
-        if event.ph == "C" && event.name != PER_KERNEL_COUNTER {
+        if event.ph == "C" {
             if let Some(value) = event.counter_value {
                 counters
                     .entry(event.name)
@@ -977,6 +973,29 @@ fn diagnostics_df<'a>(
         columns.push(Column::new((*name).into(), col));
     }
     Ok((DataFrame::new_infer_height(columns)?, bins))
+}
+
+/// Adds the rank's count of kernels on a process group, and of those with a
+/// c10d sequence number, to its diagnostics `activity` row (row 0): together
+/// they tell whether cross-rank matching had anything to work with.
+fn add_group_kernel_counts(
+    diagnostics: &mut DataFrame,
+    pg_dfs: &[(String, DataFrame)],
+) -> Result<()> {
+    let (mut kernels, mut sequenced) = (0i64, 0i64);
+    for (_, df) in pg_dfs {
+        kernels += df.height() as i64;
+        if let Ok(col) = df.column("sequence_id") {
+            sequenced += (col.len() - col.null_count()) as i64;
+        }
+    }
+    let n = diagnostics.height();
+    for (name, v) in [("group_kernels", kernels), ("sequenced_kernels", sequenced)] {
+        let mut col = vec![0i64; n];
+        col[0] = v;
+        diagnostics.with_column(Column::new(name.into(), col))?;
+    }
+    Ok(())
 }
 
 /// Stat columns of the counter timeline bins.
@@ -1177,7 +1196,7 @@ pub fn process(
         (0..cols.ts.len()).map(|i| (cols.cat(i), cols.name(i), cols.ts[i], cols.dur[i])),
     );
     filt.assign_steps(&steps);
-    let (diagnostics, bins) = diagnostics_df(
+    let (mut diagnostics, bins) = diagnostics_df(
         rank,
         &steps,
         (0..cols.ts.len())
@@ -1197,6 +1216,7 @@ pub fn process(
     )?;
 
     let mut pg_dfs = pg_split(&filt, rank, &rank_info)?;
+    add_group_kernel_counts(&mut diagnostics, &pg_dfs)?;
     pg_dfs.push((DIAGNOSTICS_PG.to_string(), diagnostics));
     if let Some(bins) = bins {
         pg_dfs.push((
@@ -1316,7 +1336,7 @@ pub fn process_view(
     let steps =
         step_spans((0..view.len()).map(|i| (view.cat(i), view.name(i), view.ts(i), view.dur(i))));
     filt.assign_steps(&steps);
-    let (diagnostics, bins) = diagnostics_df(
+    let (mut diagnostics, bins) = diagnostics_df(
         rank,
         &steps,
         (0..view.len())
@@ -1335,6 +1355,7 @@ pub fn process_view(
             }),
     )?;
     let mut pg_dfs = pg_split(&filt, rank, &rank_info)?;
+    add_group_kernel_counts(&mut diagnostics, &pg_dfs)?;
     pg_dfs.push((DIAGNOSTICS_PG.to_string(), diagnostics));
     if let Some(bins) = bins {
         pg_dfs.push((

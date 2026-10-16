@@ -102,16 +102,15 @@ pub(crate) struct Activity {
     pub nccl_unannotated_us: f64,
     /// ProfilerStep range the rank's capture covers; None without markers.
     pub steps: Option<(i64, i64)>,
+    /// Kernels on a process group, and those with a c10d sequence number.
+    pub group_kernels: u64,
+    pub sequenced_kernels: u64,
 }
 
 impl Activity {
-    /// Whether this rank lost process-group metadata on more than
-    /// `ANNOTATION_LOSS_SHARE` of its NCCL kernels, by count or by time.
+    /// Whether any of this rank's NCCL kernels lack process-group metadata.
     pub fn loses_pg_metadata(&self) -> bool {
-        (self.nccl_kernels > 0
-            && self.nccl_unannotated as f64 > ANNOTATION_LOSS_SHARE * self.nccl_kernels as f64)
-            || (self.nccl_us > 0.0
-                && self.nccl_unannotated_us > ANNOTATION_LOSS_SHARE * self.nccl_us)
+        self.nccl_unannotated > 0
     }
 }
 
@@ -177,6 +176,8 @@ fn from_path(path: &Path) -> Result<Diagnostics> {
                 other_comm_unannotated: num(get("other_comm_unannotated", row)) as u64,
                 nccl_us: num(get("nccl_us", row)),
                 nccl_unannotated_us: num(get("nccl_unannotated_us", row)),
+                group_kernels: num(get("group_kernels", row)) as u64,
+                sequenced_kernels: num(get("sequenced_kernels", row)) as u64,
                 steps: match (get("step_min", row), get("step_max", row)) {
                     ("", _) | (_, "") => None,
                     (lo, hi) => Some((num(lo) as i64, num(hi) as i64)).filter(|s| s.0 >= 0),
@@ -187,11 +188,6 @@ fn from_path(path: &Path) -> Result<Diagnostics> {
     out.activity.sort_by_key(|a| a.rank);
     Ok(out)
 }
-
-/// Share of a rank's NCCL kernels without process-group metadata above which
-/// the run is flagged: such kernels are counted as communication but appear
-/// on no group timeline and in no cross-rank statistic.
-pub(crate) const ANNOTATION_LOSS_SHARE: f64 = 0.01;
 
 /// Ascending ranks as ranges and strides: `0-3,8,12-60:4` (`a-b:s` is every
 /// s-th rank from a to b), so strided groups like a 256-rank FSDP group stay
@@ -301,34 +297,11 @@ pub(crate) fn step_warnings(diag: &Diagnostics) -> Vec<String> {
     )]
 }
 
-/// Whether any of the first few process groups' kernels carry a c10d
-/// sequence number. Sequence numbers come from the PyTorch version, so a
-/// sample of groups decides for the run without decoding every member.
-pub(crate) fn any_sequence(per_pg_all: &[(String, u64, std::path::PathBuf)]) -> Result<bool> {
-    let groups = per_pg_all
-        .iter()
-        .filter(|(stem, _, _)| !comms_viz_core::analysis::is_diagnostics_member(stem))
-        .take(16);
-    let mut seen = false;
-    for (_, _, path) in groups {
-        seen = true;
-        let payload = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-        let table = table_from_member(&payload);
-        if table
-            .col("sequence_id")
-            .is_some_and(|col| col.iter().any(|v| !v.is_empty()))
-        {
-            return Ok(true);
-        }
-    }
-    Ok(!seen)
-}
-
 /// Warnings about what the analysis could not cover: ranks missing from the
 /// trace directory, or traces without c10d sequence numbers (PyTorch before
 /// 2.12 does not record them on kernels), which leave nothing to match
 /// across ranks.
-pub(crate) fn coverage_warnings(status: &serde_json::Value, any_sequence: bool) -> Vec<String> {
+pub(crate) fn coverage_warnings(status: &serde_json::Value, diag: &Diagnostics) -> Vec<String> {
     let mut out = Vec::new();
     let processed = status["ranks"]["processed"].as_i64().unwrap_or(0);
     let total = status["ranks"]["total"].as_i64().unwrap_or(0);
@@ -338,7 +311,9 @@ pub(crate) fn coverage_warnings(status: &serde_json::Value, any_sequence: bool) 
              or failed to parse). Group sizes, stragglers and outliers cover only those ranks."
         ));
     }
-    if !any_sequence {
+    let group_kernels: u64 = diag.activity.iter().map(|a| a.group_kernels).sum();
+    let sequenced: u64 = diag.activity.iter().map(|a| a.sequenced_kernels).sum();
+    if group_kernels > 0 && sequenced == 0 {
         out.push(
             "No collective kernel carries a c10d sequence number, so no collective is matched \
              across ranks: no imbalance, straggler or bandwidth statistics. PyTorch before 2.12 \
@@ -379,6 +354,8 @@ mod tests {
             nccl_us: 0.0,
             nccl_unannotated_us: 0.0,
             steps,
+            group_kernels: 0,
+            sequenced_kernels: 0,
         };
         let diag = |activity| Diagnostics {
             activity,
@@ -415,6 +392,8 @@ mod tests {
             nccl_us: nccl as f64,
             nccl_unannotated_us: bare as f64,
             steps: None,
+            group_kernels: 0,
+            sequenced_kernels: 0,
         };
         let diag = Diagnostics {
             activity: vec![
@@ -426,12 +405,7 @@ mod tests {
         };
         let warnings = annotation_warnings(&diag);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].starts_with("1 of 3 ranks"), "{}", warnings[0]);
-        assert!(
-            warnings[0].contains("60% of their NCCL kernel time"),
-            "{}",
-            warnings[0]
-        );
-        assert!(warnings[0].contains("ranks 2)"), "{}", warnings[0]);
+        assert!(warnings[0].starts_with("2 of 3 ranks"), "{}", warnings[0]);
+        assert!(warnings[0].contains("ranks 1,2)"), "{}", warnings[0]);
     }
 }

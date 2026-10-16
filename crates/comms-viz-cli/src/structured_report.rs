@@ -43,19 +43,8 @@ const MAX_AXES: usize = 30;
 const TOP_RANKS: usize = 20;
 /// Worst cohorts kept per group before the axis-wide top-K.
 const WORST_PER_GROUP: usize = 3;
-/// Robust z-score (median / MAD) beyond which a rank is an outlier...
-const OUTLIER_Z: f64 = 4.0;
-/// ...if it is also this far from the median, relative to the median.
-const OUTLIER_REL: f64 = 0.05;
-/// A group whose median bus bandwidth is below this share of its axis'
-/// median for the same collective is slow.
-const SLOW_GROUP_SHARE: f64 = 0.75;
-/// A rank is a straggler suspect from this z-score of its last-arrival
-/// count against chance.
-const STRAGGLER_Z: f64 = 4.0;
-/// Smallest payload whose bandwidth is reported: below it a collective is
-/// latency-bound and its "bandwidth" says nothing about the links.
-const MIN_BW_BYTES: f64 = (1 << 20) as f64;
+/// Lowest and highest ranks listed per per-rank metric.
+const EXTREMES: usize = 5;
 
 #[derive(Clone, Debug)]
 struct Event {
@@ -519,8 +508,8 @@ struct GroupSummary {
     complete: usize,
     incomplete: usize,
     spreads: Vec<f64>,
-    /// Bus bandwidth (GB/s) of complete cohorts, by collective.
-    busbw: BTreeMap<String, Vec<f64>>,
+    /// (bus bandwidth GB/s, payload bytes) of complete cohorts, by collective.
+    busbw: BTreeMap<String, Vec<(f64, f64)>>,
     /// Complete cohorts without a bandwidth because ranks move different
     /// amounts (uneven all-to-all, rooted gather/scatter), by collective.
     no_bw: BTreeMap<String, usize>,
@@ -582,12 +571,12 @@ fn summarize_group(index: usize, stem: &str, axis: &str, raw: &[Event]) -> Group
                 .or_default() += 1;
         }
         if let (true, Some(factor)) = kind {
-            if quick.dur > 0.0 && payload >= MIN_BW_BYTES {
+            if quick.dur > 0.0 && payload > 0.0 {
                 summary
                     .busbw
                     .entry(display_name(ear).to_string())
                     .or_default()
-                    .push(payload / quick.dur / 1000.0 * factor);
+                    .push((payload / quick.dur / 1000.0 * factor, payload));
             }
         }
         summary.worst.push(WorstCohort {
@@ -617,31 +606,24 @@ fn summarize_group(index: usize, stem: &str, axis: &str, raw: &[Event]) -> Group
     summary
 }
 
-/// Robust outliers of one per-rank metric: |x - median| beyond both
-/// `OUTLIER_Z` scaled MADs and `OUTLIER_REL` of the median.
-fn outliers(values: &[(i64, f64)]) -> (f64, Vec<(i64, f64, f64)>) {
-    let s = sorted(values.iter().map(|(_, v)| *v).collect());
-    if s.len() < 4 {
-        return (f64::NAN, Vec::new());
-    }
-    let median = pctl(&s, 0.5);
-    let mad = pctl(&sorted(s.iter().map(|v| (v - median).abs()).collect()), 0.5) * 1.4826;
-    let floor = (OUTLIER_REL * median.abs()).max(1e-9);
-    let mut out: Vec<(i64, f64, f64)> = values
+/// One per-rank metric: its median over ranks and the `EXTREMES` lowest and
+/// highest ranks.
+type RankValues = Vec<(i64, f64)>;
+
+fn extremes(values: &[(i64, f64)]) -> Option<(f64, RankValues, RankValues)> {
+    let mut v: Vec<(i64, f64)> = values
         .iter()
-        .filter(|(_, v)| v.is_finite() && (v - median).abs() > floor)
-        .map(|&(rank, v)| {
-            let z = if mad > 0.0 {
-                (v - median) / mad
-            } else {
-                f64::INFINITY.copysign(v - median)
-            };
-            (rank, v, z)
-        })
-        .filter(|(_, _, z)| z.abs() >= OUTLIER_Z)
+        .copied()
+        .filter(|(_, x)| x.is_finite())
         .collect();
-    out.sort_by(|a, b| b.2.abs().total_cmp(&a.2.abs()));
-    (median, out)
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+    let median = v[(v.len() - 1) / 2].1;
+    let low = v.iter().take(EXTREMES).copied().collect();
+    let high = v.iter().rev().take(EXTREMES).copied().collect();
+    Some((median, low, high))
 }
 
 /// Rank -> host from `rank_map.json` (`runs` of [start, len, host index, _]).
@@ -735,11 +717,10 @@ fn build_summary(
         by_axis.entry(&g.axis).or_default().push(i);
     }
     let mut axis_docs = Vec::new();
-    let mut slow_groups_of_rank: HashMap<i64, (u32, u32)> = HashMap::new();
     for (axis, idx) in &by_axis {
         let gs: Vec<&GroupSummary> = idx.iter().map(|&i| &groups[i]).collect();
         let sizes = sorted(gs.iter().map(|g| g.ranks.len() as f64).collect());
-        let mut busbw_all: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
+        let mut busbw_all: BTreeMap<&str, Vec<(f64, f64)>> = BTreeMap::new();
         for g in &gs {
             for (op, v) in &g.busbw {
                 busbw_all.entry(op).or_default().extend(v);
@@ -747,29 +728,19 @@ fn build_summary(
         }
         let axis_median: BTreeMap<&str, f64> = busbw_all
             .iter()
-            .map(|(op, v)| (*op, pctl(&sorted(v.clone()), 0.5)))
+            .map(|(op, v)| (*op, pctl(&sorted(v.iter().map(|x| x.0).collect()), 0.5)))
             .collect();
-        // Each group's bandwidth relative to its axis, for the busiest
-        // collective it shares with the axis.
-        let mut slow: Vec<(usize, String, f64, f64)> = Vec::new();
-        for &i in idx {
-            let g = &groups[i];
-            let Some((op, v)) = g.busbw.iter().max_by_key(|(_, v)| v.len()) else {
-                continue;
-            };
-            let med = pctl(&sorted(v.clone()), 0.5);
-            let share = med / axis_median[op.as_str()];
-            for &r in &g.ranks {
-                let e = slow_groups_of_rank.entry(r).or_default();
-                e.0 += 1;
-                e.1 += u32::from(share < SLOW_GROUP_SHARE);
-            }
-            if share < SLOW_GROUP_SHARE {
-                slow.push((i, op.clone(), med, share));
-            }
-        }
-        let slow_count = slow.len();
-        slow.sort_by(|a, b| a.3.total_cmp(&b.3));
+        // Each group's median bandwidth for its most frequent collective,
+        // lowest first, against the axis median for that collective.
+        let mut lowest: Vec<(usize, String, f64, f64)> = idx
+            .iter()
+            .filter_map(|&i| {
+                let (op, v) = groups[i].busbw.iter().max_by_key(|(_, v)| v.len())?;
+                let med = pctl(&sorted(v.iter().map(|x| x.0).collect()), 0.5);
+                Some((i, op.clone(), med, med / axis_median[op.as_str()]))
+            })
+            .collect();
+        lowest.sort_by(|a, b| a.3.total_cmp(&b.3).then(a.0.cmp(&b.0)));
         // The worst collective of each group, so one bad group doesn't fill
         // the table with its consecutive sequence numbers.
         let mut worst: Vec<WorstCohort> =
@@ -821,7 +792,11 @@ fn build_summary(
                 "kernel_time_per_rank_us": dist(unmatched_by_rank.values().copied().collect()),
             },
             "start_spread_us": dist(gs.iter().flat_map(|g| g.spreads.iter().copied()).collect()),
-            "busbw_gbps": busbw_all.into_iter().map(|(op, v)| (op.to_string(), bw_dist(v))).collect::<serde_json::Map<_, _>>(),
+            "busbw_gbps": busbw_all.into_iter().map(|(op, v)| {
+                let mut doc = bw_dist(v.iter().map(|x| x.0).collect());
+                doc["payload_bytes_p50"] = json!(pctl(&sorted(v.iter().map(|x| x.1).collect()), 0.5));
+                (op.to_string(), doc)
+            }).collect::<serde_json::Map<_, _>>(),
             "bandwidth_not_reported": no_bw,
             "worst_collectives": worst.iter().take(TOP).map(|w| json!({
                 "group": aliases[w.group],
@@ -838,8 +813,7 @@ fn build_summary(
                 doc["median_spread_us"] = json!(m);
                 doc
             }).collect::<Vec<_>>(),
-            "slow_groups": slow_count,
-            "slowest_groups": slow.iter().take(TOP).map(|(i, op, med, share)| {
+            "lowest_busbw_groups": lowest.iter().take(TOP).map(|(i, op, med, share)| {
                 let mut doc = group_ref(*i);
                 doc["op"] = json!(op);
                 doc["median_busbw_gbps"] = json!(med);
@@ -864,25 +838,7 @@ fn build_summary(
     }
     let mut stragglers: Vec<(i64, Arrivals)> = arrivals.iter().map(|(r, a)| (*r, *a)).collect();
     stragglers.sort_by(|a, b| b.1.z().total_cmp(&a.1.z()).then(a.0.cmp(&b.0)));
-    let straggler_count = stragglers
-        .iter()
-        .filter(|(_, a)| a.z() >= STRAGGLER_Z)
-        .count();
-    // Ranks that sit in slow groups more often than not: a slow link or
-    // node shows up as every group it touches being slow, while its peers
-    // share only the groups they have with it.
-    let mut slow_ranks: Vec<(i64, u32, u32)> = slow_groups_of_rank
-        .iter()
-        .filter(|(_, (n, slow))| 2 * slow > *n)
-        .map(|(r, (n, slow))| (*r, *slow, *n))
-        .collect();
-    slow_ranks.sort_by(|a, b| {
-        (b.1 as f64 / b.2 as f64)
-            .total_cmp(&(a.1 as f64 / a.2 as f64))
-            .then(a.0.cmp(&b.0))
-    });
-
-    // Per-rank outliers: utilization, communication share, GPU counters.
+    // Per-rank metrics: utilization, kernel time, GPU counters.
     let window_of: HashMap<i64, f64> = diag.activity.iter().map(|a| (a.rank, a.window)).collect();
     let share = |a: &Activity, v: f64| {
         if a.window > 0.0 {
@@ -945,45 +901,25 @@ fn build_summary(
         }
     }
     metrics.extend(counter_metrics);
-    let mut outlier_docs = Vec::new();
-    for (name, values) in &metrics {
-        let (median, flagged) = outliers(values);
-        if flagged.is_empty() {
-            continue;
-        }
-        outlier_docs.push(json!({
-            "metric": name,
-            "median": median,
-            "flagged_ranks": flagged.len(),
-            "ranks": flagged.iter().take(TOP).map(|(rank, v, z)| json!({
-                "rank": rank, "host": host_of(*rank), "value": v, "z": if z.is_finite() { json!(z) } else { json!(null) },
-            })).collect::<Vec<_>>(),
-        }));
-    }
+    let rank_doc =
+        |(rank, v): &(i64, f64)| json!({"rank": rank, "host": host_of(*rank), "value": v});
+    let extreme_docs: Vec<serde_json::Value> = metrics
+        .iter()
+        .filter_map(|(name, values)| {
+            let (median, low, high) = extremes(values)?;
+            Some(json!({
+                "metric": name,
+                "median": median,
+                "lowest": low.iter().map(rank_doc).collect::<Vec<_>>(),
+                "highest": high.iter().map(rank_doc).collect::<Vec<_>>(),
+            }))
+        })
+        .collect();
     let ranks_per_host: HashMap<&str, usize> = hosts.values().fold(HashMap::new(), |mut m, h| {
         *m.entry(h.as_str()).or_default() += 1;
         m
     });
 
-    let compute_high: HashSet<i64> = metrics
-        .iter()
-        .filter(|(name, _)| name == "compute kernel time (us)")
-        .flat_map(|(_, values)| outliers(values).1)
-        .filter(|(_, _, z)| *z > 0.0)
-        .map(|(rank, _, _)| rank)
-        .collect();
-    let slow_rank_set: HashSet<i64> = slow_ranks.iter().map(|(r, _, _)| *r).collect();
-    // A tag only informs while it singles ranks out: when most ranks lose
-    // metadata (e.g. a framework calling NCCL directly), it says nothing.
-    let mut lost_set: HashSet<i64> = diag
-        .activity
-        .iter()
-        .filter(|a| a.loses_pg_metadata())
-        .map(|a| a.rank)
-        .collect();
-    if 2 * lost_set.len() > diag.activity.len() {
-        lost_set.clear();
-    }
     let straggler_docs: Vec<serde_json::Value> = stragglers
         .iter()
         .take(TOP_RANKS)
@@ -996,23 +932,9 @@ fn build_summary(
                         .map(|x| (axis.to_string(), json!(format!("{}/{}", x.last, x.cohorts))))
                 })
                 .collect();
-            // What else the summary says about this rank: the cause of a
-            // straggler usually shows up as one of these, while ranks that
-            // only wait for it show none.
-            let mut also = Vec::new();
-            if compute_high.contains(rank) {
-                also.push("compute time high");
-            }
-            if slow_rank_set.contains(rank) {
-                also.push("in slow groups");
-            }
-            if lost_set.contains(rank) {
-                also.push("lost PG metadata");
-            }
             json!({
                 "rank": rank,
                 "host": host_of(*rank),
-                "also": also,
                 "last": a.last,
                 "cohorts": a.cohorts,
                 "expected_last": a.expected,
@@ -1101,17 +1023,8 @@ fn build_summary(
             "cpu_active": utilization(&|a| share(a, a.cpu)),
             "window_us": dist(window_of.values().copied().collect()),
         },
-        "stragglers": {
-            "suspects": straggler_count,
-            "top": straggler_docs,
-        },
-        "ranks_in_slow_groups": {
-            "count": slow_ranks.len(),
-            "top": slow_ranks.iter().take(TOP_RANKS).map(|(r, slow, n)| json!({
-                "rank": r, "host": host_of(*r), "slow_groups": slow, "groups": n,
-            })).collect::<Vec<_>>(),
-        },
-        "outliers": outlier_docs,
+        "stragglers": straggler_docs,
+        "per_rank_extremes": extreme_docs,
         "axes": axis_docs,
         "axes_total": axes_total,
     })
@@ -1164,7 +1077,7 @@ fn readme(s: &serde_json::Value) -> String {
     let _ = writeln!(
         out,
         "- NCCL kernels without process-group metadata: {} of {}, {}% of NCCL kernel time \
-         ({} ranks above 1%). They count as communication time but are in no group or \
+         ({} ranks). They count as communication time but are in no group or \
          statistic below.",
         f(&q["nccl_kernels_without_pg_metadata"]),
         f(&q["nccl_kernels"]),
@@ -1233,35 +1146,22 @@ fn readme(s: &serde_json::Value) -> String {
         );
     }
 
-    let st = &s["stragglers"];
     let _ = writeln!(out, "\n## Stragglers\n");
     let _ = writeln!(
         out,
-        "How often each rank starts a matched collective last, over every group: `last / \
-         collectives` counts its matched collectives and those it started last; `expected` is \
-         the count by chance (1/n per collective of n ranks), `z` the excess over chance in \
-         standard deviations, `mean lag` its average start after the first rank (us), `last by \
-         axis` the same counts per axis. z >= {STRAGGLER_Z}: {} ranks. A straggler's peers wait \
-         for it, so ranks downstream of it also score; `also` lists what else this summary \
-         flags on the rank, which a cause usually has and a waiting rank usually doesn't.\n",
-        f(&st["suspects"])
+        "Ranks by how often they start a matched collective last, over every group, highest \
+         z first: `last / collectives` counts its matched collectives and those it started \
+         last; `expected` is the count by chance (1/n per collective of n ranks), `z` the \
+         excess over chance in standard deviations, `mean lag` its average start after the \
+         first rank (us), `last by axis` the same counts per axis. Covers collectives with \
+         process-group metadata: {}% of NCCL kernel time has none.\n",
+        small_pct(&q["nccl_time_without_pg_metadata_pct"])
     );
-    let lost_pct = q["nccl_time_without_pg_metadata_pct"]
-        .as_f64()
-        .unwrap_or(0.0);
-    if lost_pct >= 25.0 {
-        let _ = writeln!(
-            out,
-            "**Caution:** {}% of NCCL kernel time has no process-group metadata and is not in \
-             this table; the straggler of those collectives may be another rank.\n",
-            f(&json!(lost_pct))
-        );
-    }
     let _ = writeln!(
         out,
-        "| rank | host | last / collectives | expected | z | mean lag | also | last by axis |\n|---|---|---|---|---|---|---|---|"
+        "| rank | host | last / collectives | expected | z | mean lag | last by axis |\n|---|---|---|---|---|---|---|"
     );
-    for r in st["top"].as_array().into_iter().flatten() {
+    for r in s["stragglers"].as_array().into_iter().flatten() {
         let by_axis = r["last_by_axis"]
             .as_object()
             .map(|m| {
@@ -1271,13 +1171,9 @@ fn readme(s: &serde_json::Value) -> String {
                     .join(", ")
             })
             .unwrap_or_default();
-        let also = r["also"]
-            .as_array()
-            .map(|a| a.iter().map(f).collect::<Vec<_>>().join(", "))
-            .unwrap_or_default();
         let _ = writeln!(
             out,
-            "| {} | {} | {}/{} | {} | {} | {} | {also} | {by_axis} |",
+            "| {} | {} | {}/{} | {} | {} | {} | {by_axis} |",
             f(&r["rank"]),
             f(&r["host"]),
             f(&r["last"]),
@@ -1288,55 +1184,32 @@ fn readme(s: &serde_json::Value) -> String {
         );
     }
 
-    let sr = &s["ranks_in_slow_groups"];
-    let _ = writeln!(out, "\n## Ranks in slow groups\n");
+    let _ = writeln!(out, "\n## Per-rank extremes\n");
     let _ = writeln!(
         out,
-        "A group is slow when its median busbw is under {:.0}% of its axis' median for the \
-         same collective. Ranks in slow groups more than half the time: {}. A slow node or \
-         link makes every group it is in slow.\n",
-        SLOW_GROUP_SHARE * 100.0,
-        f(&sr["count"])
+        "Per metric, the median over ranks and the {EXTREMES} lowest and highest ranks \
+         (rank: value).\n"
     );
-    if sr["count"].as_u64().unwrap_or(0) > 0 {
-        let _ = writeln!(out, "| rank | host | slow groups / groups |\n|---|---|---|");
-        for r in sr["top"].as_array().into_iter().flatten() {
-            let _ = writeln!(
-                out,
-                "| {} | {} | {}/{} |",
-                f(&r["rank"]),
-                f(&r["host"]),
-                f(&r["slow_groups"]),
-                f(&r["groups"])
-            );
-        }
-    }
-
-    let _ = writeln!(out, "\n## Per-rank outliers\n");
-    let _ = writeln!(
-        out,
-        "Ranks more than {OUTLIER_Z} robust z (median / MAD) and {:.0}% from the median of \
-         all ranks.\n",
-        OUTLIER_REL * 100.0
-    );
-    let outliers = s["outliers"].as_array().cloned().unwrap_or_default();
-    if outliers.is_empty() {
-        let _ = writeln!(out, "None.");
-    }
-    for o in &outliers {
-        let ranks = o["ranks"]
-            .as_array()
+    let ranks_text = |list: &serde_json::Value| {
+        list.as_array()
             .into_iter()
             .flatten()
-            .map(|r| format!("{} ({}, z {})", f(&r["rank"]), f(&r["value"]), f(&r["z"])))
+            .map(|r| format!("{}: {}", f(&r["rank"]), f(&r["value"])))
             .collect::<Vec<_>>()
-            .join(", ");
+            .join(", ")
+    };
+    let _ = writeln!(
+        out,
+        "| metric | median | lowest | highest |\n|---|---|---|---|"
+    );
+    for m in s["per_rank_extremes"].as_array().into_iter().flatten() {
         let _ = writeln!(
             out,
-            "- {} (median {}): {} ranks; {ranks}",
-            f(&o["metric"]),
-            f(&o["median"]),
-            f(&o["flagged_ranks"])
+            "| {} | {} | {} | {} |",
+            f(&m["metric"]),
+            f(&m["median"]),
+            ranks_text(&m["lowest"]),
+            ranks_text(&m["highest"])
         );
     }
     let _ = writeln!(out, "\n## Axes\n");
@@ -1397,13 +1270,13 @@ fn readme(s: &serde_json::Value) -> String {
         if let Some(bw) = a["busbw_gbps"].as_object().filter(|m| !m.is_empty()) {
             let _ = writeln!(
                 out,
-                "Bus bandwidth of matched collectives of at least 1 MiB (smaller ones are \
-                 latency-bound):\n\n| collective | busbw min | p10 | p50 | max | n |\n|---|---|---|---|---|---|"
+                "Bus bandwidth of matched collectives:\n\n| collective | payload p50 (bytes) | busbw min | p10 | p50 | max | n |\n|---|---|---|---|---|---|---|"
             );
             for (op, d) in bw {
                 let _ = writeln!(
                     out,
-                    "| {op} | {} | {} | {} | {} | {} |",
+                    "| {op} | {} | {} | {} | {} | {} | {} |",
+                    f(&d["payload_bytes_p50"]),
                     f(&d["min"]),
                     f(&d["p10"]),
                     f(&d["p50"]),
@@ -1428,15 +1301,17 @@ fn readme(s: &serde_json::Value) -> String {
                  rooted gather/scatter), so no single payload over time describes them.\n"
             );
         }
-        let slow = a["slowest_groups"].as_array().cloned().unwrap_or_default();
-        if !slow.is_empty() {
+        let lowest = a["lowest_busbw_groups"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if !lowest.is_empty() {
             let _ = writeln!(
                 out,
-                "Slow groups: {} (median busbw under {:.0}% of the axis median). Slowest:\n",
-                f(&a["slow_groups"]),
-                SLOW_GROUP_SHARE * 100.0
+                "Groups with the lowest median busbw (for each group's most frequent \
+                 collective), against the axis median for that collective:\n"
             );
-            for g in &slow {
+            for g in &lowest {
                 let _ = writeln!(
                     out,
                     "- {} (ranks {}): {} {} GB/s, {}% of axis median",
@@ -1616,17 +1491,16 @@ mod tests {
     }
 
     #[test]
-    fn outliers_need_both_robust_z_and_relative_distance() {
-        let mut values: Vec<(i64, f64)> =
-            (0..20).map(|r| (r, 70.0 + (r % 3) as f64 * 0.1)).collect();
-        values.push((20, 35.0));
-        let (median, flagged) = outliers(&values);
-        assert!((median - 70.1).abs() < 1e-9);
-        assert_eq!(flagged.iter().map(|o| o.0).collect::<Vec<_>>(), [20]);
-        // Tiny MAD alone does not flag a rank 0.3% off the median.
-        values.pop();
-        values.push((20, 70.3));
-        assert!(outliers(&values).1.is_empty());
+    fn extremes_list_lowest_and_highest_ranks() {
+        let values: Vec<(i64, f64)> = (0..20).map(|r| (r, r as f64)).collect();
+        let (median, low, high) = extremes(&values).unwrap();
+        assert_eq!(median, 9.0);
+        assert_eq!(low.iter().map(|x| x.0).collect::<Vec<_>>(), [0, 1, 2, 3, 4]);
+        assert_eq!(
+            high.iter().map(|x| x.0).collect::<Vec<_>>(),
+            [19, 18, 17, 16, 15]
+        );
+        assert!(extremes(&[]).is_none());
     }
 
     #[test]

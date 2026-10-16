@@ -143,18 +143,40 @@ fn summary_finds_the_injected_faults() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (_, s, stderr) = analyze(tmp.path());
 
-    let top = &s["stragglers"]["top"][0];
+    let top = &s["stragglers"][0];
     assert_eq!(top["rank"], 5, "{:#}", s["stragglers"]);
     assert!(top["z"].as_f64().unwrap() >= 4.0, "{top}");
-    assert_eq!(s["stragglers"]["suspects"], 1);
 
-    let slow: BTreeSet<i64> = s["ranks_in_slow_groups"]["top"]
+    // Node 3 (ranks 12-15) has slow links: its TP groups have the axis'
+    // lowest bandwidth, and its ranks the lowest SM Active.
+    let tp = axis(&s, "tp");
+    let lowest: BTreeSet<&str> = tp["lowest_busbw_groups"]
         .as_array()
         .unwrap()
         .iter()
+        .take(2)
+        .map(|g| g["ranks"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        lowest,
+        BTreeSet::from(["12,13", "14,15"]),
+        "{:#}",
+        tp["lowest_busbw_groups"]
+    );
+    let sm = s["per_rank_extremes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["metric"] == "SM Active (%) mean")
+        .expect("SM Active extremes");
+    let low: BTreeSet<i64> = sm["lowest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .take(4)
         .map(|r| r["rank"].as_i64().unwrap())
         .collect();
-    assert_eq!(slow, (12..16).collect(), "{:#}", s["ranks_in_slow_groups"]);
+    assert_eq!(low, (12..16).collect(), "{sm:#}");
     let q = &s["data_quality"];
     assert_eq!(q["ranks_losing_pg_metadata"], 1);
     assert_eq!(q["worst_ranks_losing_pg_metadata"][0]["rank"], 2);
@@ -283,7 +305,7 @@ console.log(JSON.stringify({{ matched, last }}));
             "matched collectives on {name}"
         );
     }
-    let rust_last: BTreeMap<String, u64> = s["stragglers"]["top"]
+    let rust_last: BTreeMap<String, u64> = s["stragglers"]
         .as_array()
         .unwrap()
         .iter()

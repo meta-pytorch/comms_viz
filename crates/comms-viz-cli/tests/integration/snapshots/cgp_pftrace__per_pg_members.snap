@@ -183,11 +183,11 @@ ncclKernel_SendRecv,1700000000008077.0,210.0,8,21,default_pg,0,all_gather,493384
 ncclKernel_ReduceScatter_Sum_bf16_RING_LL,1700000000008423.0,321.0,7,26,default_pg,0,allreduce,87263,456629,4,-1,3,ncclDevKernel_ReduceScatter_Sum_bf16_RING_LL(ncclDevKernelArgsStorage<4096ul>),,,,0,0,,Float,,3,434,12884902322,375,1
 ncclKernel_SendRecv,1700000000008971.0,496.0,8,127,default_pg,0,reduce_scatter,900386,424388,4,-1,3,void ncclKernel_SendRecv(ncclDevKernelArgs4K),,,,0,0,,BFloat16,,3,456,12884902344,393,1
 ===== diagnostics_0.dpg
-kind,rank,metric,gpu_busy,compute,cpu_active,window,nccl_kernels,nccl_unannotated,other_comm_unannotated,nccl_us,nccl_unannotated_us,step_min,step_max,n,min,p10,p50,mean,p90,p99,max,std
-activity,0,"",9712.0,9110.75,4339.0,9712.0,134,0,0,36296.0,0.0,-1,-1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-activity,1,"",8971.0,8752.0,4379.0,8971.0,134,0,0,38513.0,0.0,-1,-1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-activity,2,"",9478.0,9189.5,4433.25,9478.0,134,0,0,37049.0,0.0,-1,-1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-activity,3,"",9547.0,9082.0,4344.25,9547.0,134,0,0,35874.0,0.0,-1,-1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+kind,rank,metric,gpu_busy,compute,cpu_active,window,nccl_kernels,nccl_unannotated,other_comm_unannotated,nccl_us,nccl_unannotated_us,step_min,step_max,n,min,p10,p50,mean,p90,p99,max,std,group_kernels,sequenced_kernels
+activity,0,"",9712.0,9110.75,4339.0,9712.0,134,0,0,36296.0,0.0,-1,-1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,134,0
+activity,1,"",8971.0,8752.0,4379.0,8971.0,134,0,0,38513.0,0.0,-1,-1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,134,0
+activity,2,"",9478.0,9189.5,4433.25,9478.0,134,0,0,37049.0,0.0,-1,-1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,134,0
+activity,3,"",9547.0,9082.0,4344.25,9547.0,134,0,0,35874.0,0.0,-1,-1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,134,0
 ===== dp_replicate_5.dpg
 name,ts,dur,stream,grid,para_type,pg_name,collective_name,in_nelems,out_nelems,group_size,step,rank,original_name,operation,src_rank,dst_rank,pg_id,replica_id,msg_nelems,dtype,sequence_id,graph_id,node_id,graph_node_id,replay_id,comm_kernel
 ncclKernel_AllGather_RING_LL,1700000000000313.0,142.0,20,18,mesh_dp_replicate,5,all_gather,765437,709055,4,-1,0,ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>),,,,5,0,,Float,,9,15,38654705679,12,1
