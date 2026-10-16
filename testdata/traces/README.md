@@ -82,24 +82,16 @@ slower.
 | 45,056 | 8 | 22 | 32 | 2 | 4 | 16 | 124,544 | 5:05 | 82 GB |
 | 49,152 | 4 | 24 | 64 | 2 | 4 | 32 | 127,232 | 4:42 | 87 GB |
 
-Commands (generation took 0.5-5 minutes with 300 workers; traces are 13-57 GB):
+Each run's traces came from `gen_mesh_traces.py` with the row's mesh, a few injected
+faults, and
 
 ```sh
-python3 gen_mesh_traces.py r12k --mesh dp_replicate=12,dp_shard=256,tp=4 --ep 64 \
-    --kernels-per-compute 100 --workers 300 --counters --custom-kernels \
-    --straggler 5000:1.2 --straggler 9001:1.1 --slow-node 1500:1.8 --strip-annotations 7000:0.4
-python3 gen_mesh_traces.py r20k --mesh pp=4,dp_replicate=20,dp_shard=32,cp=2,tp=4 --ep 32 \
-    --kernels-per-compute 100 --workers 300 --counters --custom-kernels \
-    --straggler 3333:1.2 --slow-node 2000:1.8 --slow-pp-link 4100:3.0 --strip-annotations 15000:0.5
-python3 gen_mesh_traces.py r45k --mesh pp=8,dp_replicate=22,dp_shard=32,cp=2,tp=4 --ep 16 \
-    --kernels-per-compute 100 --workers 300 --counters --custom-kernels \
-    --straggler 22222:1.15 --straggler 40001:1.25 --slow-node 7000:1.6 --strip-annotations 123:0.3
-python3 gen_mesh_traces.py r49k --mesh pp=4,dp_replicate=24,dp_shard=64,cp=2,tp=4 --ep 32 \
-    --kernels-per-compute 100 --workers 300 --counters --custom-kernels \
-    --straggler 31415:1.2 --slow-node 9999:1.8 --slow-pp-link 27182:3.0 --strip-annotations 44444:0.4
-
-comms_viz --trace-root r49k/step_000000000010 --out r49k_out
+python3 gen_mesh_traces.py OUT --mesh pp=4,dp_replicate=24,dp_shard=64,cp=2,tp=4 --ep 32 \
+    --kernels-per-compute 100 --workers 300 --counters --custom-kernels
+comms_viz --trace-root OUT/step_000000000010 --out OUT_analysis
 ```
+
+Generation took 0.5-5 minutes; the traces are 13-57 GB.
 
 At 49k ranks parsing the traces takes ~45 s; the rest is writing the per-group tables
 (about two files per process group) and moving them into place, which scales with the
