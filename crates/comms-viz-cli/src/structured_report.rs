@@ -492,6 +492,10 @@ struct GroupSummary {
     kernels: usize,
     no_seq: usize,
     p2p: usize,
+    /// Kernel time of the calls left out of matching (no sequence or p2p).
+    unmatched_us: f64,
+    /// The most common profiler step of the group's kernels.
+    step: Option<i64>,
     complete: usize,
     incomplete: usize,
     spreads: Vec<f64>,
@@ -521,6 +525,18 @@ fn summarize_group(index: usize, stem: &str, axis: &str, raw: &[Event]) -> Group
             .iter()
             .filter(|e| e.p2p && e.sequence.is_some())
             .count(),
+        unmatched_us: raw
+            .iter()
+            .filter(|e| e.sequence.is_none() || e.p2p)
+            .map(|e| e.dur)
+            .sum(),
+        step: {
+            let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
+            for s in raw.iter().filter_map(|e| e.step) {
+                *counts.entry(s).or_default() += 1;
+            }
+            counts.into_iter().max_by_key(|(_, n)| *n).map(|(s, _)| s)
+        },
         complete: 0,
         incomplete: 0,
         spreads: Vec::new(),
@@ -753,6 +769,7 @@ fn build_summary(
             "unmatchable_kernels": {
                 "no_sequence": gs.iter().map(|g| g.no_seq).sum::<usize>(),
                 "p2p": gs.iter().map(|g| g.p2p).sum::<usize>(),
+                "kernel_time_us": gs.iter().map(|g| g.unmatched_us).sum::<f64>(),
             },
             "start_spread_us": dist(gs.iter().flat_map(|g| g.spreads.iter().copied()).collect()),
             "busbw_gbps": busbw_all.into_iter().map(|(op, v)| (op.to_string(), dist(v))).collect::<serde_json::Map<_, _>>(),
@@ -930,7 +947,13 @@ fn build_summary(
     });
     let host_docs: Vec<serde_json::Value> = flagged_by_host
         .iter()
-        .filter(|((_, host), ranks)| ranks.len() >= 2 && 2 * ranks.len() >= ranks_per_host[host.as_str()])
+        // With one host, "most of its ranks" is just "most ranks", e.g. a
+        // pipeline stage; that is not a host problem.
+        .filter(|((_, host), ranks)| {
+            ranks_per_host.len() > 1
+                && ranks.len() >= 2
+                && 2 * ranks.len() >= ranks_per_host[host.as_str()]
+        })
         .take(TOP)
         .map(|((metric, host), ranks)| {
             let ranks: Vec<i64> = ranks.iter().copied().collect();
@@ -942,18 +965,18 @@ fn build_summary(
     let nccl: u64 = diag.activity.iter().map(|a| a.nccl_kernels).sum();
     let nccl_bare: u64 = diag.activity.iter().map(|a| a.nccl_unannotated).sum();
     let other_bare: u64 = diag.activity.iter().map(|a| a.other_comm_unannotated).sum();
+    let nccl_us: f64 = diag.activity.iter().map(|a| a.nccl_us).sum();
+    let nccl_bare_us: f64 = diag.activity.iter().map(|a| a.nccl_unannotated_us).sum();
     let mut lost: Vec<&Activity> = diag
         .activity
         .iter()
-        .filter(|a| {
-            a.nccl_kernels > 0
-                && a.nccl_unannotated as f64
-                    > crate::diagnostics::ANNOTATION_LOSS_SHARE * a.nccl_kernels as f64
-        })
+        .filter(|a| a.loses_pg_metadata())
         .collect();
+    let lost_share = |a: &Activity| a.nccl_unannotated_us / a.nccl_us.max(1e-9);
     lost.sort_by(|a, b| {
-        (b.nccl_unannotated as f64 / b.nccl_kernels as f64)
-            .total_cmp(&(a.nccl_unannotated as f64 / a.nccl_kernels as f64))
+        lost_share(b)
+            .total_cmp(&lost_share(a))
+            .then(a.rank.cmp(&b.rank))
     });
     let utilization = |f: &dyn Fn(&Activity) -> f64| dist(diag.activity.iter().map(f).collect());
     let run_name = data
@@ -965,23 +988,37 @@ fn build_summary(
         "run": {
             "name": run_name,
             "run_id": data.run_id,
-            "step": data.metadata_json.as_ref().and_then(|m| m["capture"]["step"].as_i64()),
+            "step": data
+                .metadata_json
+                .as_ref()
+                .and_then(|m| m["capture"]["step"].as_i64())
+                .or_else(|| {
+                    let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
+                    for s in groups.iter().filter_map(|g| g.step) {
+                        *counts.entry(s).or_default() += 1;
+                    }
+                    counts.into_iter().max_by_key(|(_, n)| *n).map(|(s, _)| s)
+                }),
             "ranks": data.status_json["ranks"]["processed"],
-            "hosts": ranks_per_host.len(),
+            "world_size": data.status_json["ranks"]["total"],
+            "hosts": if ranks_per_host.is_empty() { json!(null) } else { json!(ranks_per_host.len()) },
             "process_groups": groups.len(),
         },
         "warnings": data.warnings,
         "data_quality": {
             "nccl_kernels": nccl,
             "nccl_kernels_without_pg_metadata": nccl_bare,
+            "nccl_time_without_pg_metadata_pct": if nccl_us > 0.0 { 100.0 * nccl_bare_us / nccl_us } else { 0.0 },
             "ranks_losing_pg_metadata": lost.len(),
             "worst_ranks_losing_pg_metadata": lost.iter().take(TOP).map(|a| json!({
                 "rank": a.rank, "host": host_of(a.rank), "unannotated": a.nccl_unannotated, "nccl_kernels": a.nccl_kernels,
+                "unannotated_time_pct": 100.0 * lost_share(a),
             })).collect::<Vec<_>>(),
             "other_comm_kernels_without_pg_metadata": other_bare,
             "unmatchable_kernels": {
                 "no_sequence": groups.iter().map(|g| g.no_seq).sum::<usize>(),
                 "p2p": groups.iter().map(|g| g.p2p).sum::<usize>(),
+                "kernel_time_us": groups.iter().map(|g| g.unmatched_us).sum::<f64>(),
             },
             "incomplete_collectives": groups.iter().map(|g| g.incomplete).sum::<usize>(),
         },
@@ -1011,7 +1048,7 @@ fn f(value: &serde_json::Value) -> String {
     if value.is_null() {
         return "-".to_string();
     }
-    match value.as_f64() {
+    match value.as_f64().map(|v| if v == 0.0 { 0.0 } else { v }) {
         Some(v) if v.abs() >= 100.0 => format!("{v:.0}"),
         Some(v) => d1(v),
         None => value
@@ -1026,13 +1063,14 @@ fn readme(s: &serde_json::Value) -> String {
     let _ = writeln!(out, "# comms_viz summary: {}\n", f(&run["name"]));
     let _ = writeln!(
         out,
-        "run id `{}`, step {}, {} ranks on {} hosts, {} process groups. Times are us, \
+        "run id `{}`, step {}, {} of {} ranks on {} hosts, {} process groups. Times are us, \
          bandwidth GB/s (nccl-tests busbw). Every table is a top-{TOP} or a distribution; \
          `summary.json` has the same content. Rank lists use `a-b` for ranges and `a-b:s` \
          for every s-th rank.\n",
         f(&run["run_id"]),
         f(&run["step"]),
         f(&run["ranks"]),
+        f(&run["world_size"]),
         f(&run["hosts"]),
         f(&run["process_groups"])
     );
@@ -1044,10 +1082,12 @@ fn readme(s: &serde_json::Value) -> String {
     let _ = writeln!(out, "\n## Data quality\n");
     let _ = writeln!(
         out,
-        "- NCCL kernels without process-group metadata: {} of {} ({} ranks above 1%). \
-         They count as communication time but are in no group or statistic below.",
+        "- NCCL kernels without process-group metadata: {} of {}, {}% of NCCL kernel time \
+         ({} ranks above 1%). They count as communication time but are in no group or \
+         statistic below.",
         f(&q["nccl_kernels_without_pg_metadata"]),
         f(&q["nccl_kernels"]),
+        f(&q["nccl_time_without_pg_metadata_pct"]),
         f(&q["ranks_losing_pg_metadata"])
     );
     for r in q["worst_ranks_losing_pg_metadata"]
@@ -1057,11 +1097,12 @@ fn readme(s: &serde_json::Value) -> String {
     {
         let _ = writeln!(
             out,
-            "  - rank {} ({}): {} of {}",
+            "  - rank {} ({}): {} of {} kernels, {}% of NCCL time",
             f(&r["rank"]),
             f(&r["host"]),
             f(&r["unannotated"]),
-            f(&r["nccl_kernels"])
+            f(&r["nccl_kernels"]),
+            f(&r["unannotated_time_pct"])
         );
     }
     let _ = writeln!(
@@ -1071,10 +1112,12 @@ fn readme(s: &serde_json::Value) -> String {
     );
     let _ = writeln!(
         out,
-        "- Kernels not matched across ranks: {} without a c10d sequence, {} p2p send/recv \
-         (sequence 0 on every call). Collectives missing a member: {}.",
+        "- Kernels left out of cross-rank matching (only their order would pair them): {} \
+         without a c10d sequence, {} p2p send/recv; {} us of kernel time in total, including \
+         time waiting for the peer. Collectives missing a member: {}.",
         f(&q["unmatchable_kernels"]["no_sequence"]),
         f(&q["unmatchable_kernels"]["p2p"]),
+        f(&q["unmatchable_kernels"]["kernel_time_us"]),
         f(&q["incomplete_collectives"])
     );
 
@@ -1219,7 +1262,7 @@ fn readme(s: &serde_json::Value) -> String {
         let _ = writeln!(
             out,
             "### {}\n\n{} groups of {} ranks; {} kernels, {} matched collectives, {} missing a \
-             member, {} kernels unmatchable (no sequence {}, p2p {}).\n",
+             member, {} kernels unmatched (no sequence {}, p2p {}; {} us).\n",
             f(&a["axis"]),
             f(&a["groups"]),
             if gs["min"] == gs["max"] {
@@ -1237,7 +1280,8 @@ fn readme(s: &serde_json::Value) -> String {
                     + a["unmatchable_kernels"]["p2p"].as_u64().unwrap_or(0)
             )),
             f(&a["unmatchable_kernels"]["no_sequence"]),
-            f(&a["unmatchable_kernels"]["p2p"])
+            f(&a["unmatchable_kernels"]["p2p"]),
+            f(&a["unmatchable_kernels"]["kernel_time_us"])
         );
         let sp = &a["start_spread_us"];
         if !sp.is_null() {

@@ -224,6 +224,10 @@ fn load_run_data(tree: &ValidatedTree) -> Result<RunData> {
         .map(|p| format!("{}/", p.display()));
 
     let mut warnings = tree.warnings.clone();
+    warnings.extend(crate::diagnostics::coverage_warnings(
+        &status_json,
+        crate::diagnostics::any_sequence(&per_pg_all)?,
+    ));
     warnings.extend(crate::diagnostics::annotation_warnings(
         &crate::diagnostics::read(&per_pg_all)?,
     ));

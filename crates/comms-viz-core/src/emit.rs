@@ -252,16 +252,31 @@ fn read_parquet_bytes(bytes: &[u8]) -> Result<DataFrame> {
 /// identical across our inputs by construction. Eager vstack avoids the
 /// lazy planner's per-input overhead at 14K+ inputs.
 fn concat_vertical_relaxed(dfs: Vec<DataFrame>) -> Result<DataFrame> {
-    let mut it = dfs.into_iter();
-    let mut out = it.next().ok_or_else(|| anyhow::anyhow!("empty concat"))?;
-    for df in it {
-        out.vstack_mut(&df)?;
+    // Stack in batches of single-chunk frames: polars recurses per chunk in
+    // places, and one chunk per rank (the diagnostics member) overflowed a
+    // rayon worker's stack at 20k-45k ranks.
+    const BATCH: usize = 256;
+    let mut level = dfs;
+    if level.is_empty() {
+        anyhow::bail!("empty concat");
     }
-    // One chunk per input frame otherwise: the diagnostics member gets one
-    // per rank, and encoding ~20k chunks overflowed a rayon worker's stack
-    // (and took ~18 s at 20k ranks).
-    out.rechunk_mut_par();
-    Ok(out)
+    loop {
+        let mut next = Vec::with_capacity(level.len().div_ceil(BATCH));
+        let mut it = level.into_iter();
+        while let Some(mut out) = it.next() {
+            out.rechunk_mut();
+            for mut df in it.by_ref().take(BATCH - 1) {
+                df.rechunk_mut();
+                out.vstack_mut(&df)?;
+            }
+            out.rechunk_mut();
+            next.push(out);
+        }
+        if next.len() == 1 {
+            return Ok(next.pop().expect("one frame"));
+        }
+        level = next;
+    }
 }
 
 /// Vertical concat of breakdown frames whose columns can differ (per-axis

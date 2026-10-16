@@ -50,6 +50,10 @@ pub fn extra_comm_kernel_patterns() -> &'static [(&'static str, Vec<&'static str
                     "_triton_a2a_v2_kernel",
                     "symm_memall_gather_AllGatherKernel",
                     "symm_memreduce_scatter_ReduceScatterKernel",
+                    // Transformer Engine comm-GEMM overlap (Megatron
+                    // --tp-comm-overlap): kuserbuffers_pushsend/pushrecv,
+                    // userbuffers_*_inplace_gpu_mc_ag/rs.
+                    "userbuffers",
                 ]
                 .into_iter()
                 .chain(shared.iter().copied())
@@ -225,13 +229,14 @@ mod tests {
         assert_eq!(all[5], "_triton_a2a_v2_kernel");
         assert_eq!(all[6], "symm_memall_gather_AllGatherKernel");
         assert_eq!(all[7], "symm_memreduce_scatter_ReduceScatterKernel");
-        assert_eq!(all[8], "_triton_symm_mem_barrier");
-        assert_eq!(all[9], "symmetric_memory::barrier_kernel");
-        assert_eq!(all[10], "_triton_all_to_all_");
-        assert_eq!(all[11], "hybrid_ep::dispatch_kernel");
-        assert_eq!(all[22], "deep_ep::internode");
-        assert_eq!(all[23], "_reduce_scatter");
-        assert_eq!(all[24], "_all_gather");
-        assert_eq!(all.len(), 25);
+        assert_eq!(all[8], "userbuffers");
+        assert_eq!(all[9], "_triton_symm_mem_barrier");
+        assert_eq!(all[10], "symmetric_memory::barrier_kernel");
+        assert_eq!(all[11], "_triton_all_to_all_");
+        assert_eq!(all[12], "hybrid_ep::dispatch_kernel");
+        assert_eq!(all[23], "deep_ep::internode");
+        assert_eq!(all[24], "_reduce_scatter");
+        assert_eq!(all[25], "_all_gather");
+        assert_eq!(all.len(), 26);
     }
 }

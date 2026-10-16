@@ -198,12 +198,13 @@ struct Prepared {
     pg_name: Vec<String>,
 }
 
+/// Group name -> what its axis is derived from (`axis_source`).
 fn process_group_descriptions(
     process_groups: &[ProcessGroupConfig],
-) -> rustc_hash::FxHashMap<&str, &str> {
+) -> rustc_hash::FxHashMap<&str, String> {
     process_groups
         .iter()
-        .map(|group| (group.pg_name.as_str(), group.pg_desc.as_str()))
+        .map(|group| (group.pg_name.as_str(), axis_source(group).into_owned()))
         .collect()
 }
 
@@ -241,17 +242,33 @@ pub(crate) fn pg_group_id(pg_name: &str) -> String {
 }
 
 /// Group physical process groups by their trace-provided semantic axis.
+/// What a group's axis is derived from: its description, else its name.
+/// Groups created without a description (plain `new_group` leaves PyTorch's
+/// default "undefined") are split by size and rank stride, so e.g. TP pairs
+/// and DP pairs don't land in one axis and get compared with each other.
+fn axis_source(config: &ProcessGroupConfig) -> std::borrow::Cow<'_, str> {
+    if config.pg_desc.is_empty() {
+        return config.pg_name.as_str().into();
+    }
+    if config.pg_desc != "undefined" {
+        return config.pg_desc.as_str().into();
+    }
+    let mut ranks = config.ranks.clone();
+    ranks.sort_unstable();
+    let stride = match ranks.as_slice() {
+        [a, b, ..] if ranks.windows(2).all(|w| w[1] - w[0] == b - a) => format!("_stride{}", b - a),
+        [_, _, ..] => "_mixed".to_string(),
+        _ => String::new(),
+    };
+    format!("undefined_size{}{stride}", config.pg_size).into()
+}
+
 pub(crate) fn process_group_axes(
     configs: &[ProcessGroupConfig],
 ) -> std::collections::BTreeMap<String, Vec<&ProcessGroupConfig>> {
     let mut axes = std::collections::BTreeMap::new();
     for config in configs {
-        let source = if config.pg_desc.is_empty() {
-            &config.pg_name
-        } else {
-            &config.pg_desc
-        };
-        let para_type = extract_comm_type(source);
+        let para_type = extract_comm_type(&axis_source(config));
         let axis = sanitize_axis(para_type.strip_prefix("mesh_").unwrap_or(&para_type));
         if !axis.is_empty() {
             axes.entry(axis).or_insert_with(Vec::new).push(config);
@@ -275,14 +292,7 @@ fn trace_rank_info(process_groups: &[ProcessGroupConfig]) -> RankInfo {
         .map(|(axis, configs)| {
             let mut para_types = configs
                 .into_iter()
-                .map(|config| {
-                    let source = if config.pg_desc.is_empty() {
-                        &config.pg_name
-                    } else {
-                        &config.pg_desc
-                    };
-                    extract_comm_type(source)
-                })
+                .map(|config| extract_comm_type(&axis_source(config)))
                 .filter(|value| !value.is_empty())
                 .collect::<Vec<_>>();
             para_types.sort();
@@ -295,17 +305,20 @@ fn trace_rank_info(process_groups: &[ProcessGroupConfig]) -> RankInfo {
 fn event_comm_type(
     pg_desc: &str,
     pg_name: &str,
-    process_group_descriptions: &rustc_hash::FxHashMap<&str, &str>,
+    process_group_descriptions: &rustc_hash::FxHashMap<&str, String>,
 ) -> String {
-    let desc = extract_comm_type(pg_desc);
-    if !desc.is_empty() {
-        return desc;
+    // An "undefined" description is split by the group's layout, which only
+    // the PG inventory knows.
+    if pg_desc != "undefined" {
+        let desc = extract_comm_type(pg_desc);
+        if !desc.is_empty() {
+            return desc;
+        }
     }
     extract_comm_type(
         process_group_descriptions
             .get(pg_name)
-            .copied()
-            .unwrap_or(pg_name),
+            .map_or(pg_name, String::as_str),
     )
 }
 
@@ -854,6 +867,7 @@ fn diagnostics_df<'a>(
     // annotations). Other communication kernels (HybridEP, DeepEP, ...)
     // never carry it.
     let (mut nccl, mut nccl_bare, mut other_bare) = (0u64, 0u64, 0u64);
+    let (mut nccl_us, mut nccl_bare_us) = (0.0, 0.0);
     for event in events {
         let span = (event.ts, event.ts + event.dur);
         if matches!(event.cat, "kernel" | "gpu_memcpy" | "gpu_memset") {
@@ -867,7 +881,11 @@ fn diagnostics_df<'a>(
             let is_nccl = event.name.starts_with("nccl") || event.name.contains(" nccl");
             if is_nccl {
                 nccl += 1;
-                nccl_bare += u64::from(!event.annotated_collective);
+                nccl_us += event.dur;
+                if !event.annotated_collective {
+                    nccl_bare += 1;
+                    nccl_bare_us += event.dur;
+                }
             } else if kind == KT_COMMUNICATION && !event.annotated_collective {
                 other_bare += 1;
             }
@@ -931,6 +949,8 @@ fn diagnostics_df<'a>(
         Column::new("nccl_kernels".into(), first_only_u(nccl)),
         Column::new("nccl_unannotated".into(), first_only_u(nccl_bare)),
         Column::new("other_comm_unannotated".into(), first_only_u(other_bare)),
+        Column::new("nccl_us".into(), first_only(nccl_us)),
+        Column::new("nccl_unannotated_us".into(), first_only(nccl_bare_us)),
     ];
     for (name, col) in PM_STATS.iter().zip(stats) {
         columns.push(Column::new((*name).into(), col));
@@ -1444,6 +1464,32 @@ mod process_group_tests {
             pg_size: ranks.len() as i64,
             ranks: ranks.to_vec(),
         }
+    }
+
+    #[test]
+    fn undescribed_groups_split_by_size_and_stride() {
+        let group = |name: &str, ranks: Vec<i64>| ProcessGroupConfig {
+            pg_name: name.into(),
+            pg_desc: "undefined".into(),
+            backend_config: "cuda:nccl".into(),
+            pg_size: ranks.len() as i64,
+            ranks,
+        };
+        let configs = vec![
+            group("1", vec![0, 1]),
+            group("2", vec![2, 3]),
+            group("21", vec![0, 4]),
+            group("30", vec![0, 1, 2, 3]),
+        ];
+        let axes: Vec<String> = process_group_axes(&configs).into_keys().collect();
+        assert_eq!(
+            axes,
+            [
+                "undefined_size2_stride1",
+                "undefined_size2_stride4",
+                "undefined_size4_stride1"
+            ]
+        );
     }
 
     #[test]

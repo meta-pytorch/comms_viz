@@ -97,6 +97,20 @@ pub(crate) struct Activity {
     pub nccl_kernels: u64,
     pub nccl_unannotated: u64,
     pub other_comm_unannotated: u64,
+    /// NCCL kernel time, and the part without process-group metadata (us).
+    pub nccl_us: f64,
+    pub nccl_unannotated_us: f64,
+}
+
+impl Activity {
+    /// Whether this rank lost process-group metadata on more than
+    /// `ANNOTATION_LOSS_SHARE` of its NCCL kernels, by count or by time.
+    pub fn loses_pg_metadata(&self) -> bool {
+        (self.nccl_kernels > 0
+            && self.nccl_unannotated as f64 > ANNOTATION_LOSS_SHARE * self.nccl_kernels as f64)
+            || (self.nccl_us > 0.0
+                && self.nccl_unannotated_us > ANNOTATION_LOSS_SHARE * self.nccl_us)
+    }
 }
 
 pub(crate) struct CounterStats {
@@ -159,6 +173,8 @@ fn from_path(path: &Path) -> Result<Diagnostics> {
                 nccl_kernels: num(get("nccl_kernels", row)) as u64,
                 nccl_unannotated: num(get("nccl_unannotated", row)) as u64,
                 other_comm_unannotated: num(get("other_comm_unannotated", row)) as u64,
+                nccl_us: num(get("nccl_us", row)),
+                nccl_unannotated_us: num(get("nccl_unannotated_us", row)),
             });
         }
     }
@@ -210,33 +226,91 @@ pub(crate) fn ranks_short(ranks: &[i64], max: usize) -> String {
     }
 }
 
-/// Ranks whose NCCL kernels lost their process-group metadata, e.g.
-/// CUDA-graph replays whose capture annotations did not resolve.
+/// Ranks whose NCCL kernels lack process-group metadata: p2p from
+/// `batch_isend_irecv`, which PyTorch does not annotate, or CUDA-graph
+/// replays whose capture annotations did not resolve.
 pub(crate) fn annotation_warnings(diag: &Diagnostics) -> Vec<String> {
     let flagged: Vec<&Activity> = diag
         .activity
         .iter()
-        .filter(|a| {
-            a.nccl_kernels > 0
-                && a.nccl_unannotated as f64 > ANNOTATION_LOSS_SHARE * a.nccl_kernels as f64
-        })
+        .filter(|a| a.loses_pg_metadata())
         .collect();
     if flagged.is_empty() {
         return Vec::new();
     }
     let ranks: Vec<i64> = flagged.iter().map(|a| a.rank).collect();
-    let (bare, total) = flagged.iter().fold((0, 0), |(b, t), a| {
-        (b + a.nccl_unannotated, t + a.nccl_kernels)
+    let (bare, total, bare_us, total_us) = flagged.iter().fold((0, 0, 0.0, 0.0), |acc, a| {
+        (
+            acc.0 + a.nccl_unannotated,
+            acc.1 + a.nccl_kernels,
+            acc.2 + a.nccl_unannotated_us,
+            acc.3 + a.nccl_us,
+        )
     });
+    let share = if total_us > 0.0 {
+        100.0 * bare_us / total_us
+    } else {
+        0.0
+    };
     vec![format!(
         "{} of {} ranks have NCCL kernels without process-group metadata ({bare} of their \
-         {total} NCCL kernels; ranks {}). Those kernels count as communication time but are \
-         on no group timeline and in no cross-rank statistic. For CUDA graphs, check that \
-         capture annotations resolve (see README, CUDA graphs).",
+         {total} NCCL kernels, {share:.0}% of their NCCL kernel time; ranks {}). Those \
+         kernels count as communication time but are on no group timeline and in no \
+         cross-rank statistic. Common causes: p2p from batch_isend_irecv, which PyTorch does \
+         not annotate, or CUDA-graph replays whose capture annotations did not resolve (see \
+         README, CUDA graphs).",
         flagged.len(),
         diag.activity.len(),
         ranks_short(&ranks, 20)
     )]
+}
+
+/// Whether any of the first few process groups' kernels carry a c10d
+/// sequence number. Sequence numbers come from the PyTorch version, so a
+/// sample of groups decides for the run without decoding every member.
+pub(crate) fn any_sequence(per_pg_all: &[(String, u64, std::path::PathBuf)]) -> Result<bool> {
+    let groups = per_pg_all
+        .iter()
+        .filter(|(stem, _, _)| stem != comms_viz_core::analysis::DIAGNOSTICS_PG)
+        .take(16);
+    let mut seen = false;
+    for (_, _, path) in groups {
+        seen = true;
+        let payload = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        let table = table_from_member(&payload);
+        if table
+            .col("sequence_id")
+            .is_some_and(|col| col.iter().any(|v| !v.is_empty()))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(!seen)
+}
+
+/// Warnings about what the analysis could not cover: ranks missing from the
+/// trace directory, or traces without c10d sequence numbers (PyTorch before
+/// 2.12 does not record them on kernels), which leave nothing to match
+/// across ranks.
+pub(crate) fn coverage_warnings(status: &serde_json::Value, any_sequence: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    let processed = status["ranks"]["processed"].as_i64().unwrap_or(0);
+    let total = status["ranks"]["total"].as_i64().unwrap_or(0);
+    if total > processed {
+        out.push(format!(
+            "Only {processed} of {total} ranks were analyzed. Group sizes, stragglers and \
+             outliers cover only those ranks."
+        ));
+    }
+    if !any_sequence {
+        out.push(
+            "No collective kernel carries a c10d sequence number (PyTorch before 2.12 does \
+             not record them), so no collective is matched across ranks: no imbalance, \
+             straggler or bandwidth statistics."
+                .to_string(),
+        );
+    }
+    out
 }
 
 #[cfg(test)]
@@ -266,6 +340,8 @@ mod tests {
             nccl_kernels: nccl,
             nccl_unannotated: bare,
             other_comm_unannotated: 0,
+            nccl_us: nccl as f64,
+            nccl_unannotated_us: bare as f64,
         };
         let diag = Diagnostics {
             activity: vec![
@@ -278,6 +354,11 @@ mod tests {
         let warnings = annotation_warnings(&diag);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].starts_with("1 of 3 ranks"), "{}", warnings[0]);
+        assert!(
+            warnings[0].contains("60% of their NCCL kernel time"),
+            "{}",
+            warnings[0]
+        );
         assert!(warnings[0].contains("ranks 2)"), "{}", warnings[0]);
     }
 }
