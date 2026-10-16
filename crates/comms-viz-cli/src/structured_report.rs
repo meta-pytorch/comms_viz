@@ -50,6 +50,9 @@ const SLOW_GROUP_SHARE: f64 = 0.75;
 /// A rank is a straggler suspect from this z-score of its last-arrival
 /// count against chance.
 const STRAGGLER_Z: f64 = 4.0;
+/// Smallest payload whose bandwidth is reported: below it a collective is
+/// latency-bound and its "bandwidth" says nothing about the links.
+const MIN_BW_BYTES: f64 = (1 << 20) as f64;
 
 #[derive(Clone, Debug)]
 struct Event {
@@ -428,6 +431,21 @@ fn pctl(sorted: &[f64], p: f64) -> f64 {
     sorted[i]
 }
 
+/// Bandwidth distribution: the slow tail is the low end.
+fn bw_dist(values: Vec<f64>) -> serde_json::Value {
+    let s = sorted(values);
+    if s.is_empty() {
+        return serde_json::Value::Null;
+    }
+    json!({
+        "n": s.len(),
+        "min": s[0],
+        "p10": pctl(&s, 0.1),
+        "p50": pctl(&s, 0.5),
+        "max": s[s.len() - 1],
+    })
+}
+
 fn dist(values: Vec<f64>) -> serde_json::Value {
     let s = sorted(values);
     if s.is_empty() {
@@ -492,8 +510,9 @@ struct GroupSummary {
     kernels: usize,
     no_seq: usize,
     p2p: usize,
-    /// Kernel time of the calls left out of matching (no sequence or p2p).
-    unmatched_us: f64,
+    /// Per rank, kernel time of the calls left out of matching (no sequence
+    /// or p2p), including time waiting for the peer.
+    unmatched_us: Vec<(i64, f64)>,
     /// The most common profiler step of the group's kernels.
     step: Option<i64>,
     complete: usize,
@@ -525,11 +544,13 @@ fn summarize_group(index: usize, stem: &str, axis: &str, raw: &[Event]) -> Group
             .iter()
             .filter(|e| e.p2p && e.sequence.is_some())
             .count(),
-        unmatched_us: raw
-            .iter()
-            .filter(|e| e.sequence.is_none() || e.p2p)
-            .map(|e| e.dur)
-            .sum(),
+        unmatched_us: {
+            let mut by_rank: BTreeMap<i64, f64> = BTreeMap::new();
+            for e in raw.iter().filter(|e| e.sequence.is_none() || e.p2p) {
+                *by_rank.entry(e.rank).or_default() += e.dur;
+            }
+            by_rank.into_iter().collect()
+        },
         step: {
             let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
             for s in raw.iter().filter_map(|e| e.step) {
@@ -556,7 +577,7 @@ fn summarize_group(index: usize, stem: &str, axis: &str, raw: &[Event]) -> Group
         summary.spreads.push(spread);
         let payload = payload_bytes(&c.members, events);
         if let (true, Some(factor)) = bw_kind(&c.members, events) {
-            if quick.dur > 0.0 && payload > 0.0 {
+            if quick.dur > 0.0 && payload >= MIN_BW_BYTES {
                 summary
                     .busbw
                     .entry(display_name(ear).to_string())
@@ -744,13 +765,29 @@ fn build_summary(
         }
         let slow_count = slow.len();
         slow.sort_by(|a, b| a.3.total_cmp(&b.3));
-        let mut worst: Vec<WorstCohort> = gs.iter().flat_map(|g| g.worst.clone()).collect();
+        // The worst collective of each group, so one bad group doesn't fill
+        // the table with its consecutive sequence numbers.
+        let mut worst: Vec<WorstCohort> =
+            gs.iter().filter_map(|g| g.worst.first().cloned()).collect();
         worst.sort_by(|a, b| b.spread.total_cmp(&a.spread));
         let mut median_spread: Vec<(usize, f64)> = idx
             .iter()
             .filter(|&&i| !groups[i].spreads.is_empty())
             .map(|&i| (i, pctl(&sorted(groups[i].spreads.clone()), 0.5)))
+            .filter(|&(_, m)| m > 0.0)
             .collect();
+        let mut unmatched_by_rank: HashMap<i64, f64> = HashMap::new();
+        for g in &gs {
+            for (r, us) in &g.unmatched_us {
+                *unmatched_by_rank.entry(*r).or_default() += us;
+            }
+        }
+        // Rank stride within a group, when the first group's ranks are evenly
+        // spaced: with the group size it gives the axis' place in the layout.
+        let stride = gs.first().and_then(|g| match g.ranks.as_slice() {
+            [a, b, ..] if g.ranks.windows(2).all(|w| w[1] - w[0] == b - a) => Some(b - a),
+            _ => None,
+        });
         median_spread.sort_by(|a, b| b.1.total_cmp(&a.1));
         let group_ref = |i: usize| {
             json!({
@@ -763,16 +800,17 @@ fn build_summary(
             "axis": axis,
             "groups": gs.len(),
             "group_size": {"min": sizes.first(), "max": sizes.last()},
+            "rank_stride": stride,
             "kernels": gs.iter().map(|g| g.kernels).sum::<usize>(),
             "matched_collectives": gs.iter().map(|g| g.complete).sum::<usize>(),
             "incomplete_collectives": gs.iter().map(|g| g.incomplete).sum::<usize>(),
             "unmatchable_kernels": {
                 "no_sequence": gs.iter().map(|g| g.no_seq).sum::<usize>(),
                 "p2p": gs.iter().map(|g| g.p2p).sum::<usize>(),
-                "kernel_time_us": gs.iter().map(|g| g.unmatched_us).sum::<f64>(),
+                "kernel_time_per_rank_us": dist(unmatched_by_rank.values().copied().collect()),
             },
             "start_spread_us": dist(gs.iter().flat_map(|g| g.spreads.iter().copied()).collect()),
-            "busbw_gbps": busbw_all.into_iter().map(|(op, v)| (op.to_string(), dist(v))).collect::<serde_json::Map<_, _>>(),
+            "busbw_gbps": busbw_all.into_iter().map(|(op, v)| (op.to_string(), bw_dist(v))).collect::<serde_json::Map<_, _>>(),
             "worst_collectives": worst.iter().take(TOP).map(|w| json!({
                 "group": aliases[w.group],
                 "step": w.step,
@@ -814,31 +852,6 @@ fn build_summary(
         .iter()
         .filter(|(_, a)| a.z() >= STRAGGLER_Z)
         .count();
-    let straggler_docs: Vec<serde_json::Value> = stragglers
-        .iter()
-        .take(TOP_RANKS)
-        .map(|(rank, a)| {
-            let per_axis: serde_json::Map<String, serde_json::Value> = by_axis
-                .keys()
-                .filter_map(|axis| {
-                    arrivals_by_axis
-                        .get(&(*rank, *axis))
-                        .map(|x| (axis.to_string(), json!(format!("{}/{}", x.last, x.cohorts))))
-                })
-                .collect();
-            json!({
-                "rank": rank,
-                "host": host_of(*rank),
-                "last": a.last,
-                "cohorts": a.cohorts,
-                "expected_last": a.expected,
-                "z": a.z(),
-                "mean_lag_us": if a.cohorts > 0 { a.lag / a.cohorts as f64 } else { 0.0 },
-                "last_by_axis": per_axis,
-            })
-        })
-        .collect();
-
     // Ranks that sit in slow groups more often than not: a slow link or
     // node shows up as every group it touches being slow, while its peers
     // share only the groups they have with it.
@@ -952,12 +965,65 @@ fn build_summary(
         .filter(|((_, host), ranks)| {
             ranks_per_host.len() > 1
                 && ranks.len() >= 2
-                && 2 * ranks.len() >= ranks_per_host[host.as_str()]
+                && 2 * ranks.len() > ranks_per_host[host.as_str()]
         })
         .take(TOP)
         .map(|((metric, host), ranks)| {
             let ranks: Vec<i64> = ranks.iter().copied().collect();
             json!({"host": host, "metric": metric, "ranks": ranks_short(&ranks, 8), "of": ranks_per_host[host.as_str()]})
+        })
+        .collect();
+
+    let compute_high: HashSet<i64> = metrics
+        .iter()
+        .filter(|(name, _)| name == "compute kernel time (us)")
+        .flat_map(|(_, values)| outliers(values).1)
+        .filter(|(_, _, z)| *z > 0.0)
+        .map(|(rank, _, _)| rank)
+        .collect();
+    let slow_rank_set: HashSet<i64> = slow_ranks.iter().map(|(r, _, _)| *r).collect();
+    let lost_set: HashSet<i64> = diag
+        .activity
+        .iter()
+        .filter(|a| a.loses_pg_metadata())
+        .map(|a| a.rank)
+        .collect();
+    let straggler_docs: Vec<serde_json::Value> = stragglers
+        .iter()
+        .take(TOP_RANKS)
+        .map(|(rank, a)| {
+            let per_axis: serde_json::Map<String, serde_json::Value> = by_axis
+                .keys()
+                .filter_map(|axis| {
+                    arrivals_by_axis
+                        .get(&(*rank, *axis))
+                        .map(|x| (axis.to_string(), json!(format!("{}/{}", x.last, x.cohorts))))
+                })
+                .collect();
+            // What else the summary says about this rank: the cause of a
+            // straggler usually shows up as one of these, while ranks that
+            // only wait for it show none.
+            let mut also = Vec::new();
+            if compute_high.contains(rank) {
+                also.push("compute time high");
+            }
+            if slow_rank_set.contains(rank) {
+                also.push("in slow groups");
+            }
+            if lost_set.contains(rank) {
+                also.push("lost PG metadata");
+            }
+            json!({
+                "rank": rank,
+                "host": host_of(*rank),
+                "also": also,
+                "last": a.last,
+                "cohorts": a.cohorts,
+                "expected_last": a.expected,
+                "z": a.z(),
+                "mean_lag_us": if a.cohorts > 0 { a.lag / a.cohorts as f64 } else { 0.0 },
+                "last_by_axis": per_axis,
+            })
         })
         .collect();
 
@@ -978,6 +1044,15 @@ fn build_summary(
             .total_cmp(&lost_share(a))
             .then(a.rank.cmp(&b.rank))
     });
+    let unmatched_dist = {
+        let mut by_rank: HashMap<i64, f64> = HashMap::new();
+        for g in groups {
+            for (r, us) in &g.unmatched_us {
+                *by_rank.entry(*r).or_default() += us;
+            }
+        }
+        dist(by_rank.into_values().collect())
+    };
     let utilization = |f: &dyn Fn(&Activity) -> f64| dist(diag.activity.iter().map(f).collect());
     let run_name = data
         .run_json
@@ -1018,7 +1093,7 @@ fn build_summary(
             "unmatchable_kernels": {
                 "no_sequence": groups.iter().map(|g| g.no_seq).sum::<usize>(),
                 "p2p": groups.iter().map(|g| g.p2p).sum::<usize>(),
-                "kernel_time_us": groups.iter().map(|g| g.unmatched_us).sum::<f64>(),
+                "kernel_time_per_rank_us": unmatched_dist,
             },
             "incomplete_collectives": groups.iter().map(|g| g.incomplete).sum::<usize>(),
         },
@@ -1042,6 +1117,14 @@ fn build_summary(
         "host_outliers": host_docs,
         "axes": axis_docs,
     })
+}
+
+/// A percentage, with small nonzero values shown as "<0.1" instead of "0".
+fn small_pct(value: &serde_json::Value) -> String {
+    match value.as_f64() {
+        Some(v) if v > 0.0 && v < 0.1 => "<0.1".to_string(),
+        _ => f(value),
+    }
 }
 
 fn f(value: &serde_json::Value) -> String {
@@ -1087,7 +1170,7 @@ fn readme(s: &serde_json::Value) -> String {
          statistic below.",
         f(&q["nccl_kernels_without_pg_metadata"]),
         f(&q["nccl_kernels"]),
-        f(&q["nccl_time_without_pg_metadata_pct"]),
+        small_pct(&q["nccl_time_without_pg_metadata_pct"]),
         f(&q["ranks_losing_pg_metadata"])
     );
     for r in q["worst_ranks_losing_pg_metadata"]
@@ -1113,11 +1196,12 @@ fn readme(s: &serde_json::Value) -> String {
     let _ = writeln!(
         out,
         "- Kernels left out of cross-rank matching (only their order would pair them): {} \
-         without a c10d sequence, {} p2p send/recv; {} us of kernel time in total, including \
-         time waiting for the peer. Collectives missing a member: {}.",
+         without a c10d sequence, {} p2p send/recv; per rank {} us p50, {} us max of kernel \
+         time, including time waiting for the peer. Collectives missing a member: {}.",
         f(&q["unmatchable_kernels"]["no_sequence"]),
         f(&q["unmatchable_kernels"]["p2p"]),
-        f(&q["unmatchable_kernels"]["kernel_time_us"]),
+        f(&q["unmatchable_kernels"]["kernel_time_per_rank_us"]["p50"]),
+        f(&q["unmatchable_kernels"]["kernel_time_per_rank_us"]["max"]),
         f(&q["incomplete_collectives"])
     );
 
@@ -1154,15 +1238,18 @@ fn readme(s: &serde_json::Value) -> String {
     let _ = writeln!(out, "\n## Stragglers\n");
     let _ = writeln!(
         out,
-        "How often each rank starts a matched collective last, against chance (1/n per \
-         collective of n ranks), over every group. z >= {STRAGGLER_Z}: {} ranks. A straggler's \
-         peers wait for it, so ranks downstream of it can also score; the highest z is the \
-         likeliest cause.\n",
+        "How often each rank starts a matched collective last, over every group: `last / \
+         collectives` counts its matched collectives and those it started last; `expected` is \
+         the count by chance (1/n per collective of n ranks), `z` the excess over chance in \
+         standard deviations, `mean lag` its average start after the first rank (us), `last by \
+         axis` the same counts per axis. z >= {STRAGGLER_Z}: {} ranks. A straggler's peers wait \
+         for it, so ranks downstream of it also score; `also` lists what else this summary \
+         flags on the rank, which a cause usually has and a waiting rank usually doesn't.\n",
         f(&st["suspects"])
     );
     let _ = writeln!(
         out,
-        "| rank | host | last / collectives | expected | z | mean lag | last by axis |\n|---|---|---|---|---|---|---|"
+        "| rank | host | last / collectives | expected | z | mean lag | also | last by axis |\n|---|---|---|---|---|---|---|---|"
     );
     for r in st["top"].as_array().into_iter().flatten() {
         let by_axis = r["last_by_axis"]
@@ -1174,9 +1261,13 @@ fn readme(s: &serde_json::Value) -> String {
                     .join(", ")
             })
             .unwrap_or_default();
+        let also = r["also"]
+            .as_array()
+            .map(|a| a.iter().map(f).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
         let _ = writeln!(
             out,
-            "| {} | {} | {}/{} | {} | {} | {} | {by_axis} |",
+            "| {} | {} | {}/{} | {} | {} | {} | {also} | {by_axis} |",
             f(&r["rank"]),
             f(&r["host"]),
             f(&r["last"]),
@@ -1261,14 +1352,20 @@ fn readme(s: &serde_json::Value) -> String {
         let gs = &a["group_size"];
         let _ = writeln!(
             out,
-            "### {}\n\n{} groups of {} ranks; {} kernels, {} matched collectives, {} missing a \
-             member, {} kernels unmatched (no sequence {}, p2p {}; {} us).\n",
+            "### {}\n\n{} groups of {} ranks{}; {} kernels, {} matched collectives, {} missing a \
+             member, {} kernels unmatched (no sequence {}, p2p {}; per rank {} us p50, {} us \
+             max).\n",
             f(&a["axis"]),
             f(&a["groups"]),
             if gs["min"] == gs["max"] {
                 f(&gs["min"])
             } else {
                 format!("{}-{}", f(&gs["min"]), f(&gs["max"]))
+            },
+            if a["rank_stride"].is_null() {
+                String::new()
+            } else {
+                format!(" at rank stride {}", f(&a["rank_stride"]))
             },
             f(&a["kernels"]),
             f(&a["matched_collectives"]),
@@ -1281,7 +1378,8 @@ fn readme(s: &serde_json::Value) -> String {
             )),
             f(&a["unmatchable_kernels"]["no_sequence"]),
             f(&a["unmatchable_kernels"]["p2p"]),
-            f(&a["unmatchable_kernels"]["kernel_time_us"])
+            f(&a["unmatchable_kernels"]["kernel_time_per_rank_us"]["p50"]),
+            f(&a["unmatchable_kernels"]["kernel_time_per_rank_us"]["max"])
         );
         let sp = &a["start_spread_us"];
         if !sp.is_null() {
@@ -1298,14 +1396,16 @@ fn readme(s: &serde_json::Value) -> String {
         if let Some(bw) = a["busbw_gbps"].as_object().filter(|m| !m.is_empty()) {
             let _ = writeln!(
                 out,
-                "| collective | busbw p50 | p90 | max | n |\n|---|---|---|---|---|"
+                "Bus bandwidth of matched collectives of at least 1 MiB (smaller ones are \
+                 latency-bound):\n\n| collective | busbw min | p10 | p50 | max | n |\n|---|---|---|---|---|---|"
             );
             for (op, d) in bw {
                 let _ = writeln!(
                     out,
-                    "| {op} | {} | {} | {} | {} |",
+                    "| {op} | {} | {} | {} | {} | {} |",
+                    f(&d["min"]),
+                    f(&d["p10"]),
                     f(&d["p50"]),
-                    f(&d["p90"]),
                     f(&d["max"]),
                     f(&d["n"])
                 );
