@@ -257,6 +257,10 @@ fn concat_vertical_relaxed(dfs: Vec<DataFrame>) -> Result<DataFrame> {
     for df in it {
         out.vstack_mut(&df)?;
     }
+    // One chunk per input frame otherwise: the diagnostics member gets one
+    // per rank, and encoding ~20k chunks overflowed a rayon worker's stack
+    // (and took ~18 s at 20k ranks).
+    out.rechunk_mut_par();
     Ok(out)
 }
 
