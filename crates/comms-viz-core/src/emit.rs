@@ -30,7 +30,7 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::analysis::BreakdownValue;
-use crate::analysis::DIAGNOSTICS_PG;
+use crate::analysis::is_diagnostics_member;
 use crate::analysis::pg_group_id;
 use crate::legacy::json::TraceEnvironment;
 use crate::trace::ProcessGroupConfig;
@@ -553,11 +553,29 @@ fn write_single_worker_partial(
 /// collectives would be matched across subgroups.
 fn disambiguate_shared_group_names(results: &mut [Option<RankResult>]) -> Result<()> {
     // Per name: every rank any rank lists, and the largest reported size.
+    // Every rank lists its groups' full rank lists (the default group: the
+    // whole world), so a list already merged under the name is skipped by
+    // hash; merging them all was quadratic in world size (~2.4e9 inserts at
+    // 49k ranks).
     let mut spans: HashMap<String, (std::collections::BTreeSet<i64>, i64)> = HashMap::new();
+    let mut merged: HashMap<&str, std::collections::HashSet<u64>> = HashMap::new();
     for group in results.iter().flatten().flat_map(|r| &r.process_groups) {
+        let digest = {
+            use std::hash::Hash;
+            use std::hash::Hasher;
+            let mut h = rustc_hash::FxHasher::default();
+            group.ranks.hash(&mut h);
+            h.finish()
+        };
         let (ranks, size) = spans.entry(group.pg_name.clone()).or_default();
-        ranks.extend(&group.ranks);
         *size = (*size).max(group.pg_size);
+        if merged
+            .entry(group.pg_name.as_str())
+            .or_default()
+            .insert(digest)
+        {
+            ranks.extend(&group.ranks);
+        }
     }
     spans.retain(|_, (ranks, size)| *size > 0 && ranks.len() > *size as usize);
     if spans.is_empty() {
@@ -575,7 +593,7 @@ fn disambiguate_shared_group_names(results: &mut [Option<RankResult>]) -> Result
             }
         }
         for (key, df) in &mut result.pg_dfs {
-            if key == DIAGNOSTICS_PG {
+            if is_diagnostics_member(key) {
                 continue;
             }
             for (old, new) in &renames {
@@ -827,7 +845,7 @@ fn aggregate_decoded(
         ranks_processed,
         pg_keys: uploaded_pg_keys
             .into_iter()
-            .filter(|key| key != DIAGNOSTICS_PG)
+            .filter(|key| !is_diagnostics_member(key))
             .collect(),
         manifest_rels,
         process_groups: merge_process_group_configs(
@@ -842,6 +860,17 @@ fn merge_process_group_configs<'a>(
 ) -> Result<Vec<ProcessGroupConfig>> {
     let mut index: HashMap<&str, usize> = HashMap::new();
     let mut merged: Vec<ProcessGroupConfig> = Vec::new();
+    // Rank lists already merged per group, by hash: every member lists the
+    // same full list, and appending each copy grew the default group to
+    // members x world entries.
+    let mut seen: Vec<std::collections::HashSet<u64>> = Vec::new();
+    let digest = |ranks: &[i64]| {
+        use std::hash::Hash;
+        use std::hash::Hasher;
+        let mut h = rustc_hash::FxHasher::default();
+        ranks.hash(&mut h);
+        h.finish()
+    };
     for config in configs {
         if config.pg_name.is_empty() {
             continue;
@@ -849,6 +878,7 @@ fn merge_process_group_configs<'a>(
         let Some(&i) = index.get(config.pg_name.as_str()) else {
             index.insert(&config.pg_name, merged.len());
             merged.push(config.clone());
+            seen.push(std::collections::HashSet::from([digest(&config.ranks)]));
             continue;
         };
         let previous = &mut merged[i];
@@ -880,7 +910,9 @@ fn merge_process_group_configs<'a>(
         if previous.pg_size <= 0 {
             previous.pg_size = config.pg_size;
         }
-        previous.ranks.extend_from_slice(&config.ranks);
+        if seen[i].insert(digest(&config.ranks)) {
+            previous.ranks.extend_from_slice(&config.ranks);
+        }
     }
     for group in &mut merged {
         group.ranks.sort_unstable();

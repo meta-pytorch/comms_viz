@@ -135,7 +135,7 @@ fn assert_page_wellformed(dest: &Path, html: &str, p: &serde_json::Value) {
     for entry in p["pg_index"].as_array().into_iter().flatten() {
         let prefix = entry[0].as_str().expect("pg_index prefix");
         // Per-rank diagnostics ride in the sidecar but are not a PG axis.
-        if prefix == "diagnostics" {
+        if prefix == "diagnostics" || prefix == "diagnostics_pm" {
             continue;
         }
         for pair in entry[1].as_array().expect("pg_index pairs").chunks(2) {

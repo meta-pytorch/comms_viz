@@ -176,7 +176,7 @@ fn default_group_idx(
     }
     let candidates = || {
         (0..groups.len())
-            .filter(|index| groups[*index].0 != comms_viz_core::analysis::DIAGNOSTICS_PG)
+            .filter(|index| !comms_viz_core::analysis::is_diagnostics_member(&groups[*index].0))
     };
     candidates()
         .filter(|index| aliases.contains(axis_of(&groups[*index].0)))

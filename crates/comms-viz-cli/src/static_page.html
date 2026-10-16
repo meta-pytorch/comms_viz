@@ -317,8 +317,11 @@ details.node > summary { cursor: pointer; font-size: 12px; padding: 1px 0; }
         <h3 id="pl-pm-control" style="display:none"><label>
           <input type="checkbox" id="pl-pm-toggle"> Show GPU Counter Stats</label></h3>
         <div id="pl-pm" style="display:none">
-          <div class="note">Per-rank statistics of each GPU counter over the capture, from every sample in the trace.</div>
+          <div class="note">GPU counters of the selected group's ranks. The heatmap has one row per rank and splits each rank's samples into time bins on the timeline's axis (zoom and pan follow it); the color is the chosen statistic of the samples in a bin. The table has each rank's statistics over the whole capture.</div>
           <div class="cats" id="pl-pm-metrics"></div>
+          <div class="cats" id="pl-pm-stats"></div>
+          <div class="chartwrap" id="pl-pm-heatwrap" style="display:none"><canvas id="pl-pm-heat"></canvas></div>
+          <div class="note" id="pl-pm-legend"></div>
           <div id="pl-pm-table"></div>
         </div>
       </div>
@@ -773,6 +776,10 @@ const STEM_LABEL = new Map(), LABEL_STEM = new Map();
 const STEMS = new Set(GROUPS.map((g) => g.stem));
 // Sidecar member with rank activity and PM samples; not a process group.
 const DIAG_STEM = "diagnostics_0";
+// Counter timeline members: one per PM_BIN_RANKS consecutive ranks.
+const PM_BIN_PREFIX = "diagnostics_pm_", PM_BIN_RANKS = 32;
+const PM_BIN_STATS = ["min", "p1", "p50", "p99", "max"];
+const isDiag = (s) => s === DIAG_STEM || s.startsWith(PM_BIN_PREFIX);
 // <cohort-logic> Pure matching functions; tests/integration/semantics.rs runs
 // them under node against the structured report's Rust port.
 // c10d p2p calls, whose sequence number is 0 on every send and recv.
@@ -1707,7 +1714,7 @@ function typeahead(input, list, options, current, onPick) {
 const pl = {
   cache: new Map(), stem: null, events: null, minT: 0, maxT: 0, domain: null,
   nameSlot: new Map(), rows: [], imbSort: { col: "diff", dir: -1 }, imbPage: 0,
-  diagnostics: null, pmMetric: null, _cohorts: null, _hoverKey: null,
+  diagnostics: null, pmMetric: null, pmStat: "p50", pmBins: new Map(), _cohorts: null, _hoverKey: null,
   // ML/SW are recomputed per group in build() from the widest rank and
   // stream labels; SW is the small per-lane stream column beside the plot.
   ML: 96, SW: 24, MR: 12, MB: 44,
@@ -1722,7 +1729,7 @@ const pl = {
     if (this._stemsKey !== key) {
       const stems = GROUPS.length ? GROUPS.map((g) => g.stem) : RAW.per_pg.map(([s]) => s);
       const axis = new Map(stems.map((st) => [st, stemLabel(st).replace(/ \(r .*$/, "")]));
-      this._stems = stems.filter((st) => st !== DIAG_STEM).sort((a, b) =>
+      this._stems = stems.filter((st) => !isDiag(st)).sort((a, b) =>
         natural(axis.get(a), axis.get(b))
         || (STEM_FIRST_RANK.get(a) ?? 0) - (STEM_FIRST_RANK.get(b) ?? 0)
         || natural(stemLabel(a), stemLabel(b)) || natural(a, b));
@@ -1872,6 +1879,15 @@ const pl = {
         input.addEventListener("change", () => { this.pmMetric = metric; this.renderPm(); });
         box.append(el("label", { class: "it" }, input, " ", metric));
       }
+      const statBox = document.getElementById("pl-pm-stats");
+      statBox.replaceChildren(el("span", { class: "note" }, "Timeline statistic: "), ...PM_BIN_STATS.map((stat) => {
+        const input = el("input", { type: "radio", name: "pl-pm-stat",
+          ...(stat === this.pmStat ? { checked: "" } : {}) });
+        input.addEventListener("change", () => { this.pmStat = stat; this.renderPmHeat(); });
+        return el("label", { class: "it" }, input, " ", stat);
+      }));
+      const heat = document.getElementById("pl-pm-heat");
+      heat.addEventListener("mousemove", (e) => { heat.title = this.pmHeatHit(e.offsetX, e.offsetY) || ""; });
       this.renderDiagnostics();
     } catch (err) {
       console.warn("Could not load diagnostics", err);
@@ -2046,6 +2062,7 @@ const pl = {
     }
     ctx.fillText("Time (μs)", ML + PW / 2, H - 6);
     this._view = { rowH, scroll, bodyH, x0, x1, span, PW };
+    if (this._pmHeat) this.renderPmHeat();
     this.showCursor(this.cursorT);
   },
   setHoverKey(key) {
@@ -2280,6 +2297,97 @@ const pl = {
     document.getElementById("pl-pm-table").replaceChildren(rows.length
       ? el("div", { style: "overflow-x:auto" }, el("table", { class: "data" }, head, body))
       : el("p", { class: "note" }, "No samples of this counter on the selected group's ranks."));
+    this.renderPmHeat();
+  },
+  // Counter timeline bins of the selected group's ranks, fetched per
+  // PM_BIN_RANKS-rank member on first use: {rank: {metric: [bins]}}.
+  async pmBinsFor(ranks) {
+    const chunks = [...new Set([...ranks].map((r) => Math.floor(r / PM_BIN_RANKS)))];
+    await Promise.all(chunks.filter((c) => !this.pmBins.has(c)).map(async (c) => {
+      const stem = PM_BIN_PREFIX + c;
+      const pending = (async () => {
+        if (!GROUPS.some((g) => g.stem === stem) && !RAW.per_pg.some(([st]) => st === stem)) return new Map();
+        const { names, get, nrows } = tableFromMember(await this.fetchMember(stem, true));
+        const col = Object.fromEntries(names.map((h, i) => [h, i]));
+        const out = new Map();  // rank -> metric -> [{t0, w, min, p1, ...}]
+        for (let r = 0; r < nrows; r++) {
+          const rank = +get(col.rank, r), metric = String(get(col.metric, r));
+          const bin = { t0: +get(col.t0, r), w: +get(col.width, r) };
+          for (const k of PM_BIN_STATS) bin[k] = +get(col[k], r);
+          if (!out.has(rank)) out.set(rank, new Map());
+          const byMetric = out.get(rank);
+          if (!byMetric.has(metric)) byMetric.set(metric, []);
+          byMetric.get(metric).push(bin);
+        }
+        return out;
+      })();
+      this.pmBins.set(c, pending);
+      try { await pending; } catch (err) { this.pmBins.delete(c); throw err; }
+    }));
+    const out = new Map();
+    for (const c of chunks) for (const [rank, m] of await this.pmBins.get(c)) if (ranks.has(rank)) out.set(rank, m);
+    return out;
+  },
+  // Heatmap: one row per rank, bins placed on the main timeline's x axis.
+  async renderPmHeat() {
+    const wrap = document.getElementById("pl-pm-heatwrap"), legend = document.getElementById("pl-pm-legend");
+    if (!this.events || document.getElementById("pl-pm").style.display === "none") return;
+    const ranks = this.rankSet(), stem = this.stem, metric = this.pmMetric, stat = this.pmStat;
+    let bins;
+    try { bins = await this.pmBinsFor(ranks); } catch (err) { console.warn("counter timelines", err); return; }
+    if (stem !== this.stem || metric !== this.pmMetric || stat !== this.pmStat) return;  // superseded
+    const rankList = [...ranks].filter((r) => bins.get(r)?.has(metric)).sort((a, b) => a - b);
+    if (!rankList.length) { wrap.style.display = "none"; legend.textContent = ""; this._pmHeat = null; return; }
+    wrap.style.display = "";
+    const rowH = Math.max(4, Math.min(16, Math.floor(480 / rankList.length)));
+    const cv = document.getElementById("pl-pm-heat");
+    const H = rankList.length * rowH + 30;
+    const { ctx, W } = setupCanvas(cv, H);
+    ctx.clearRect(0, 0, W, H);
+    const g = this.plotGeom();
+    const ML = g.width > 0 ? g.left - cv.getBoundingClientRect().left : 210;
+    const PW = g.width > 0 ? g.width : W - ML - 12;
+    const [x0, x1] = this.dom(), lo = this.minT + x0, span = Math.max(x1 - x0, 1e-9);
+    let vmin = Infinity, vmax = -Infinity;
+    for (const r of rankList) for (const b of bins.get(r).get(metric)) {
+      if (b.t0 + b.w < lo || b.t0 > lo + span) continue;
+      vmin = Math.min(vmin, b[stat]); vmax = Math.max(vmax, b[stat]);
+    }
+    if (metric.includes("%")) { vmin = 0; vmax = 100; }
+    if (!(vmax > vmin)) { vmax = vmin + 1; }
+    // Dark blue (low) to yellow (high).
+    const color = (v) => {
+      const t = Math.max(0, Math.min(1, (v - vmin) / (vmax - vmin)));
+      return `hsl(${230 - 180 * t}, 75%, ${22 + 50 * t}%)`;
+    };
+    ctx.font = "10px ui-monospace, monospace"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    rankList.forEach((r, i) => {
+      const y = i * rowH;
+      if (rowH >= 9) { ctx.fillStyle = css("--ink-3"); ctx.fillText(`rank ${r}`, ML - 6, y + rowH / 2); }
+      for (const b of bins.get(r).get(metric)) {
+        const xa = ML + (b.t0 - lo) / span * PW, xb = ML + (b.t0 + b.w - lo) / span * PW;
+        if (xb < ML || xa > ML + PW) continue;
+        ctx.fillStyle = color(b[stat]);
+        ctx.fillRect(Math.max(xa, ML), y, Math.min(xb, ML + PW) - Math.max(xa, ML) + 0.5, rowH - (rowH > 6 ? 1 : 0));
+      }
+    });
+    ctx.fillStyle = css("--ink-3"); ctx.textAlign = "center"; ctx.font = "11px system-ui";
+    for (const v of niceTicks(span, 8)) ctx.fillText(loc(x0 + v), ML + v / span * PW, H - 18);
+    ctx.fillText("Time (μs)", ML + PW / 2, H - 5);
+    this._pmHeat = { rankList, rowH, ML, PW, lo, span, bins, metric, stat };
+    const sw = (v) => el("span", { style: `display:inline-block;width:12px;height:12px;vertical-align:middle;background:${color(v)}` });
+    legend.replaceChildren(`${metric}, ${stat} per bin: `, sw(vmin), ` ${fmtCounter(vmin)} … `, sw(vmax), ` ${fmtCounter(vmax)}`);
+  },
+  pmHeatHit(x, y) {
+    const h = this._pmHeat;
+    if (!h || x < h.ML || x > h.ML + h.PW) return null;
+    const rank = h.rankList[Math.floor(y / h.rowH)];
+    if (rank == null) return null;
+    const t = h.lo + (x - h.ML) / h.PW * h.span;
+    const b = h.bins.get(rank).get(h.metric).find((b) => t >= b.t0 && t < b.t0 + b.w);
+    if (!b) return `rank ${rank}: no samples`;
+    return `rank ${rank}, ${loc(b.t0 - this.minT)}–${loc(b.t0 + b.w - this.minT)} μs\n` +
+      PM_BIN_STATS.map((k) => `${k} ${fmtCounter(b[k])}`).join("  ");
   },
   plotGeom() {
     const cv = document.getElementById("pl-canvas"), r = cv.getBoundingClientRect();

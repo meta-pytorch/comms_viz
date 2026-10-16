@@ -237,7 +237,9 @@ fn page_and_report_match_the_same_collectives() {
     for entry in std::fs::read_dir(per_pg_dir(&out)).expect("per_pg") {
         let path = entry.expect("entry").path();
         let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
-        if path.extension().is_none_or(|e| e != "dpg") || stem == "diagnostics_0" {
+        if path.extension().is_none_or(|e| e != "dpg")
+            || comms_viz_core::analysis::is_diagnostics_member(&stem)
+        {
             continue;
         }
         let axis = axes

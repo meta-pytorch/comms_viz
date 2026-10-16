@@ -271,7 +271,7 @@ pub(crate) fn annotation_warnings(diag: &Diagnostics) -> Vec<String> {
 pub(crate) fn any_sequence(per_pg_all: &[(String, u64, std::path::PathBuf)]) -> Result<bool> {
     let groups = per_pg_all
         .iter()
-        .filter(|(stem, _, _)| stem != comms_viz_core::analysis::DIAGNOSTICS_PG)
+        .filter(|(stem, _, _)| !comms_viz_core::analysis::is_diagnostics_member(stem))
         .take(16);
     let mut seen = false;
     for (_, _, path) in groups {

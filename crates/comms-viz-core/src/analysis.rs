@@ -31,6 +31,19 @@ type RankInfo = Vec<(String, Vec<String>)>;
 /// Per-PG member holding rank activity and PM samples rather than a process group.
 pub const DIAGNOSTICS_PG: &str = "diagnostics_0";
 
+/// Prefix of the members holding GPU counter timelines, one per
+/// `COUNTER_BIN_RANKS` consecutive ranks so the page fetches only the ranks
+/// it shows.
+pub const COUNTER_BINS_PREFIX: &str = "diagnostics_pm_";
+pub const COUNTER_BIN_RANKS: i64 = 32;
+/// Time bins per rank and counter over the rank's counter samples.
+pub const COUNTER_BINS: usize = 64;
+
+/// Whether a per-PG member stem holds diagnostics rather than a process group.
+pub fn is_diagnostics_member(stem: &str) -> bool {
+    stem == DIAGNOSTICS_PG || stem.starts_with(COUNTER_BINS_PREFIX)
+}
+
 /// The breakdown row's column set — used for the -1 failure row.
 pub const BREAKDOWN_COLUMNS: &[&str] = &[
     "rank",
@@ -857,11 +870,12 @@ pub const PM_STATS: [&str; 9] = ["n", "min", "p10", "p50", "mean", "p90", "p99",
 fn diagnostics_df<'a>(
     rank: i64,
     events: impl Iterator<Item = DiagnosticEvent<'a>>,
-) -> Result<DataFrame> {
+) -> Result<(DataFrame, Option<DataFrame>)> {
     let mut gpu = Vec::new();
     let mut compute = Vec::new();
     let mut cpu = Vec::new();
-    let mut counters: std::collections::BTreeMap<&str, Vec<f64>> = Default::default();
+    // Per counter: (ts, value) samples.
+    let mut counters: std::collections::BTreeMap<&str, Vec<(f64, f64)>> = Default::default();
     // NCCL kernels should all carry c10d metadata; those without it lost
     // their annotation (e.g. CUDA-graph replays without capture
     // annotations). Other communication kernels (HybridEP, DeepEP, ...)
@@ -895,7 +909,10 @@ fn diagnostics_df<'a>(
         }
         if event.ph == "C" && event.name != PER_KERNEL_COUNTER {
             if let Some(value) = event.counter_value {
-                counters.entry(event.name).or_default().push(value);
+                counters
+                    .entry(event.name)
+                    .or_default()
+                    .push((event.ts, value));
             }
         }
     }
@@ -921,9 +938,11 @@ fn diagnostics_df<'a>(
     for col in &mut stats {
         col.push(0.0);
     }
-    for (name, mut values) in counters {
+    let bins = counter_bins_df(rank, &counters)?;
+    for (name, samples) in counters {
         kind.push("pm".to_string());
         metric.push(name.to_string());
+        let mut values: Vec<f64> = samples.into_iter().map(|(_, v)| v).collect();
         for (col, v) in stats.iter_mut().zip(counter_stats(&mut values)) {
             col.push(v);
         }
@@ -955,7 +974,69 @@ fn diagnostics_df<'a>(
     for (name, col) in PM_STATS.iter().zip(stats) {
         columns.push(Column::new((*name).into(), col));
     }
-    Ok(DataFrame::new_infer_height(columns)?)
+    Ok((DataFrame::new_infer_height(columns)?, bins))
+}
+
+/// Stat columns of the counter timeline bins.
+pub const COUNTER_BIN_STATS: [&str; 5] = ["min", "p1", "p50", "p99", "max"];
+
+/// One rank's counter timelines: its counter samples' time span cut into
+/// `COUNTER_BINS` equal bins, with min, p1, p50, p99 and max of each
+/// counter's samples per bin (empty bins have no row). `t0` is the bin's
+/// start in trace time and `width` its length, both us.
+fn counter_bins_df(
+    rank: i64,
+    counters: &std::collections::BTreeMap<&str, Vec<(f64, f64)>>,
+) -> Result<Option<DataFrame>> {
+    let all = counters.values().flatten().map(|(ts, _)| *ts);
+    let (lo, hi) = all.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| {
+        (lo.min(t), hi.max(t))
+    });
+    if !lo.is_finite() {
+        return Ok(None);
+    }
+    let width = ((hi - lo) / COUNTER_BINS as f64).max(1.0);
+    let (mut metric, mut bin, mut t0) = (Vec::new(), Vec::new(), Vec::new());
+    let mut stats: Vec<Vec<f64>> = vec![Vec::new(); COUNTER_BIN_STATS.len()];
+    for (name, samples) in counters {
+        let mut by_bin: Vec<Vec<f64>> = vec![Vec::new(); COUNTER_BINS];
+        for (ts, v) in samples {
+            let b = (((ts - lo) / width) as usize).min(COUNTER_BINS - 1);
+            by_bin[b].push(*v);
+        }
+        for (b, mut values) in by_bin.into_iter().enumerate() {
+            if values.is_empty() {
+                continue;
+            }
+            values.sort_by(f64::total_cmp);
+            let n = values.len() as f64;
+            let at = |p: f64| values[((p * n).ceil() as usize).clamp(1, values.len()) - 1];
+            metric.push(name.to_string());
+            bin.push(b as i32);
+            t0.push(lo + b as f64 * width);
+            for (col, v) in stats.iter_mut().zip([
+                values[0],
+                at(0.01),
+                at(0.5),
+                at(0.99),
+                values[values.len() - 1],
+            ]) {
+                col.push(v);
+            }
+        }
+    }
+    let n = metric.len();
+    let mut columns = vec![
+        Column::new("rank".into(), vec![rank as i32; n]),
+        Column::new("metric".into(), metric),
+        Column::new("bin".into(), bin),
+        Column::new("t0".into(), t0),
+        Column::new("width".into(), vec![width; n]),
+    ];
+    for (name, col) in COUNTER_BIN_STATS.iter().zip(stats) {
+        columns.push(Column::new((*name).into(), col));
+    }
+    Ok(Some(DataFrame::new_infer_height(columns)?))
 }
 
 fn filtered_kernels(cols: &ConvertedColumns, prep: &Prepared, names: &mut NameCache) -> Filtered {
@@ -1094,7 +1175,7 @@ pub fn process(
         (0..cols.ts.len()).map(|i| (cols.cat(i), cols.name(i), cols.ts[i], cols.dur[i])),
     );
     filt.assign_steps(&steps);
-    let diagnostics = diagnostics_df(
+    let (diagnostics, bins) = diagnostics_df(
         rank,
         (0..cols.ts.len())
             .filter(|&i| !excluded[i])
@@ -1114,6 +1195,12 @@ pub fn process(
 
     let mut pg_dfs = pg_split(&filt, rank, &rank_info)?;
     pg_dfs.push((DIAGNOSTICS_PG.to_string(), diagnostics));
+    if let Some(bins) = bins {
+        pg_dfs.push((
+            format!("{COUNTER_BINS_PREFIX}{}", rank / COUNTER_BIN_RANKS),
+            bins,
+        ));
+    }
     Ok((row, pg_dfs))
 }
 
@@ -1226,7 +1313,7 @@ pub fn process_view(
     let steps =
         step_spans((0..view.len()).map(|i| (view.cat(i), view.name(i), view.ts(i), view.dur(i))));
     filt.assign_steps(&steps);
-    let diagnostics = diagnostics_df(
+    let (diagnostics, bins) = diagnostics_df(
         rank,
         (0..view.len())
             .filter(|&i| !excluded[i])
@@ -1245,6 +1332,12 @@ pub fn process_view(
     )?;
     let mut pg_dfs = pg_split(&filt, rank, &rank_info)?;
     pg_dfs.push((DIAGNOSTICS_PG.to_string(), diagnostics));
+    if let Some(bins) = bins {
+        pg_dfs.push((
+            format!("{COUNTER_BINS_PREFIX}{}", rank / COUNTER_BIN_RANKS),
+            bins,
+        ));
+    }
     Ok((row, pg_dfs))
 }
 
@@ -1464,6 +1557,21 @@ mod process_group_tests {
             pg_size: ranks.len() as i64,
             ranks: ranks.to_vec(),
         }
+    }
+
+    #[test]
+    fn counter_bins_cover_the_samples_span() {
+        // 640 samples over [0, 640) us: 10 per bin, values 0..639.
+        let samples: Vec<(f64, f64)> = (0..640).map(|i| (i as f64, i as f64)).collect();
+        let counters = std::collections::BTreeMap::from([("SM Active (%)", samples)]);
+        let df = counter_bins_df(3, &counters).unwrap().expect("bins");
+        assert_eq!(df.height(), COUNTER_BINS);
+        let col = |name: &str| df.column(name).unwrap().f64().unwrap().clone();
+        assert_eq!(col("min").get(0), Some(0.0));
+        assert_eq!(col("max").get(0), Some(9.0));
+        assert_eq!(col("p50").get(1), Some(14.0));
+        assert_eq!(col("max").get(COUNTER_BINS - 1), Some(639.0));
+        assert!(counter_bins_df(3, &Default::default()).unwrap().is_none());
     }
 
     #[test]

@@ -686,7 +686,7 @@ pub(crate) fn write_structured_report(data: &RunData, stem: &str, dest: &Path) -
     let members: Vec<&(String, u64, std::path::PathBuf)> = data
         .per_pg_all
         .iter()
-        .filter(|(s, _, _)| s != comms_viz_core::analysis::DIAGNOSTICS_PG)
+        .filter(|(s, _, _)| !comms_viz_core::analysis::is_diagnostics_member(s))
         .collect();
     let groups: Vec<GroupSummary> = members
         .par_iter()
