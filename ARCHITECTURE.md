@@ -54,7 +54,11 @@ message sizes, dtype and group size, which comms_viz relies on to assign
 kernels to PGs and to match collective across ranks.
 
 Groups are sorted into parallelism axes (`tp`, `fsdp`, ...) using the
-mesh dimension names from DeviceMesh.
+mesh dimension names from DeviceMesh, or other group descriptions (e.g.
+Megatron's `TENSOR_MODEL_PARALLEL_GROUP`). Groups created without a
+description (`new_group` leaves PyTorch's default `undefined`) are split by
+size and rank stride, e.g. `undefined_size2_stride4`, so groups of different
+layouts don't share an axis.
 
 DeviceMesh creates a separate process group per mesh for each axis, so a job that
 builds several meshes over the same devices can show several groups with the same
