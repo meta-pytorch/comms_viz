@@ -511,6 +511,14 @@ const SHARDS = (() => {
 // ignores Range answers 200 with the whole shard: slice it locally so the
 // page still works there. `onProgress(got)` fires per 256KB while a 206
 // body streams.
+// Whole sidecar shards from servers that ignore Range requests (e.g.
+// `python3 -m http.server` answers 200 with the full file): kept so each
+// shard is downloaded once per page load instead of once per group.
+const wholeShards = new Map();
+// The first request to each shard, which tells whether the server honors
+// Range; concurrent requests (the page fetches a group, the diagnostics and
+// the breakdown at once) wait for it rather than each downloading the shard.
+const shardProbes = new Map();
 async function fetchRange(off, len, onProgress) {
   let name = RAW.data_name, local = off;
   if (SHARDS) {
@@ -520,6 +528,18 @@ async function fetchRange(off, len, onProgress) {
       throw new Error(`range ${off}+${len} spans sidecar shards`);
     name = s.name; local = off - s.start;
   }
+  if (shardProbes.has(name)) await shardProbes.get(name);
+  const whole = wholeShards.get(name);
+  if (whole) return (await whole).slice(local, local + len);
+  let probed;
+  if (!shardProbes.has(name)) shardProbes.set(name, new Promise((done) => { probed = done; }));
+  try {
+    return await fetchSidecar(name, local, len, onProgress);
+  } finally {
+    probed?.();
+  }
+}
+async function fetchSidecar(name, local, len, onProgress) {
   const r = await fetch(new URL(name, location.href), {
     headers: { Range: `bytes=${local}-${local + len - 1}` }, cache: "no-store" });
   if (!r.ok) throw new Error(`sidecar fetch failed (HTTP ${r.status})`);
@@ -540,9 +560,12 @@ async function fetchRange(off, len, onProgress) {
     bytes = new Uint8Array(got);
     let o = 0;
     for (const c of chunks) { bytes.set(c, o); o += c.length; }
+  } else if (r.status === 200) {
+    const all = r.arrayBuffer().then((b) => new Uint8Array(b));
+    wholeShards.set(name, all);
+    bytes = (await all).slice(local, local + len);
   } else {
     bytes = new Uint8Array(await r.arrayBuffer());
-    if (r.status === 200 && bytes.length > len) bytes = bytes.slice(local, local + len);
   }
   return bytes;
 }
@@ -901,7 +924,9 @@ const stemLabel = (s) => STEM_LABEL.get(s) ?? s;
 const labelStem = (l) => LABEL_STEM.get(l) ?? l;
 // Group picker order: axis, then lowest rank, then label, numbers compared as
 // numbers (tp_2 before tp_10) while the rank lists are still loading.
-const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+// One collator: localeCompare with options builds one per call, which made
+// sorting ~100k group names take seconds.
+const natural = new Intl.Collator(undefined, { numeric: true }).compare;
 function compareGroups(a, b) {
   const axis = (s) => stemLabel(s).replace(/ \(r .*$/, "");
   return natural(axis(a), axis(b))
@@ -1566,8 +1591,8 @@ const bd = {
 // (case-insensitive, whitespace ignored). Greedy left-to-right; consecutive
 // runs and matches at the start or right after '_' score higher. Returns
 // { score, pos } or null when the query doesn't fit.
-function fuzzyMatch(q, s) {
-  const lq = q.toLowerCase().replace(/\s+/g, ""), ls = s.toLowerCase();
+function fuzzyMatch(q, s, ls = s.toLowerCase()) {
+  const lq = q.toLowerCase().replace(/\s+/g, "");
   let score = 0, qi = 0, last = -2;
   const pos = [];
   for (let i = 0; i < ls.length && qi < lq.length; i++) {
@@ -1609,14 +1634,16 @@ function typeahead(input, list, options, current, onPick) {
     const on = list.querySelector(".it.on");
     if (on) on.scrollIntoView({ block: "nearest" });
   };
+  let lowered = null, loweredFor = null, pending = 0;
   const search = (q) => {
     matches = [];
     collapsed = !q;
     const values = typeof options === "function" ? options() : options;
     optionCount = values.length;
+    if (loweredFor !== values) { lowered = values.map((v) => v.toLowerCase()); loweredFor = values; }
     if (q) {
       values.forEach((s, i) => {
-        const m = fuzzyMatch(q, s);
+        const m = fuzzyMatch(q, s, lowered[i]);
         if (m) matches.push({ s, pos: m.pos, score: m.score, i });
       });
       matches.sort((a, b) => b.score - a.score || a.i - b.i);
@@ -1640,9 +1667,21 @@ function typeahead(input, list, options, current, onPick) {
   // On focus the value is the committed selection, not a query: select it
   // (typing replaces) and list every option.
   input.addEventListener("focus", () => { input.select(); search(""); });
-  input.addEventListener("input", () => search(input.value.trim()));
+  // Coalesce fast typing into one search when there are many options: each
+  // search scans every one. Keys that act on the matches flush it first.
+  const flush = () => {
+    if (!pending) return;
+    clearTimeout(pending);
+    pending = 0;
+    search(input.value.trim());
+  };
+  input.addEventListener("input", () => {
+    clearTimeout(pending);
+    pending = setTimeout(flush, optionCount > 5000 ? 60 : 0);
+  });
   input.addEventListener("blur", () => { list.style.display = "none"; input.value = current() || ""; });
   input.addEventListener("keydown", (e) => {
+    if (["ArrowDown", "ArrowUp", "Enter"].includes(e.key)) flush();
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const n = Math.min(matches.length, MAX);
@@ -1671,15 +1710,31 @@ const pl = {
   ML: 96, SW: 24, MR: 12, MB: 44,
   // Every selectable group: the sidecar index when present (all groups in
   // the run), else just the embedded warm set (no-sidecar publishes).
+  // Sorted once per label set: the picker asks on every focus and keystroke,
+  // and a 50k-rank run has ~100k groups.
   stems() {
-    const stems = GROUPS.length ? GROUPS.map((g) => g.stem) : RAW.per_pg.map(([s]) => s);
-    return stems.filter((s) => s !== DIAG_STEM).sort(compareGroups);
+    const key = `${GROUPS.length}:${RAW.per_pg.length}:${STEM_LABEL.size}`;
+    if (this._stemsKey !== key) {
+      const stems = GROUPS.length ? GROUPS.map((g) => g.stem) : RAW.per_pg.map(([s]) => s);
+      const axis = new Map(stems.map((st) => [st, stemLabel(st).replace(/ \(r .*$/, "")]));
+      this._stems = stems.filter((st) => st !== DIAG_STEM).sort((a, b) =>
+        natural(axis.get(a), axis.get(b))
+        || (STEM_FIRST_RANK.get(a) ?? 0) - (STEM_FIRST_RANK.get(b) ?? 0)
+        || natural(stemLabel(a), stemLabel(b)) || natural(a, b));
+      this._labels = this._stems.map(stemLabel);
+      this._stemsKey = key;
+    }
+    return this._stems;
+  },
+  groupLabels() {
+    this.stems();
+    return this._labels;
   },
   init() {
     const input = document.getElementById("pl-group");
     // pgmReady() installs the rank labels once the trailing island parses.
     typeahead(input, document.getElementById("pl-group-list"),
-      () => { pgmReady(); return this.stems().map(stemLabel); }, () => stemLabel(this.stem),
+      () => { pgmReady(); return this.groupLabels(); }, () => stemLabel(this.stem),
       (label) => this.load(labelStem(label)));
     document.getElementById("pl-reset").addEventListener("click", () => { this.domain = null; this.draw(); });
     document.getElementById("pl-flash").addEventListener("change", () => this.build());
