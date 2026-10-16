@@ -116,11 +116,12 @@ to recognizing custom collective kernels, but we are currently working on this.
 - **Sequence numbers.** Cross-rank matching needs the c10d sequence number on each
   collective kernel: PyTorch before 2.12 doesn't record it, and some collectives (e.g.
   symm_mem ops) never have one. p2p is never matched (see Collectives across ranks).
-- **Axes.** A process group's axis comes from its description: DeviceMesh names them
-  (`mesh_tp` -> `tp`), as do frameworks with their own names (Megatron's
-  `TENSOR_MODEL_PARALLEL_GROUP`). Groups created without a description (`new_group`'s
-  default `undefined`) are told apart only by size and rank stride, so two kinds of group
-  with the same layout share an axis. Group membership comes from the trace either way.
+- **Axes.** Groups are pooled into axes (`tp`, `dp_shard`, ...) by their description:
+  DeviceMesh names them (`mesh_tp` -> `tp`), as do frameworks with their own names
+  (Megatron's `TENSOR_MODEL_PARALLEL_GROUP`). A group created without a description
+  (`new_group`'s default `undefined`, e.g. DeepSpeed, picotron) is its own axis, named by
+  its process-group name, so per-axis statistics don't pool it with anything. Group
+  membership comes from the trace either way.
 - **Partial captures.** Any subset of ranks can be analyzed; cross-rank statistics cover
   only collectives whose whole group is present, and the report says how many ranks it
   covers. All ranks should capture the same profiler step; comms_viz warns when they don't.

@@ -36,6 +36,9 @@ use crate::publish::RunData;
 
 /// Rows in each top-K table.
 const TOP: usize = 10;
+/// Axes listed, busiest first: groups without a description are each their
+/// own axis, which at scale could be thousands.
+const MAX_AXES: usize = 30;
 /// Ranks in the straggler table.
 const TOP_RANKS: usize = 20;
 /// Worst cohorts kept per group before the axis-wide top-K.
@@ -846,6 +849,10 @@ fn build_summary(
         }));
     }
 
+    let axes_total = axis_docs.len();
+    axis_docs.sort_by_key(|a| std::cmp::Reverse(a["kernels"].as_u64().unwrap_or(0)));
+    axis_docs.truncate(MAX_AXES);
+
     // Stragglers: last-arrival counts against chance, over every group.
     let mut arrivals: HashMap<i64, Arrivals> = HashMap::new();
     let mut arrivals_by_axis: HashMap<(i64, &str), Arrivals> = HashMap::new();
@@ -1132,6 +1139,7 @@ fn build_summary(
         "outliers": outlier_docs,
         "host_outliers": host_docs,
         "axes": axis_docs,
+        "axes_total": axes_total,
     })
 }
 
@@ -1376,6 +1384,15 @@ fn readme(s: &serde_json::Value) -> String {
     }
 
     let _ = writeln!(out, "\n## Axes\n");
+    let listed = s["axes"].as_array().map_or(0, Vec::len);
+    let total = s["axes_total"].as_u64().unwrap_or(0) as usize;
+    if total > listed {
+        let _ = writeln!(
+            out,
+            "The {listed} axes with the most kernels of {total}; groups without a description \
+             (PyTorch's default `undefined`) are each their own axis.\n"
+        );
+    }
     for a in s["axes"].as_array().into_iter().flatten() {
         let gs = &a["group_size"];
         let _ = writeln!(

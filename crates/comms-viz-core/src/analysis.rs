@@ -217,7 +217,7 @@ fn process_group_descriptions(
 ) -> rustc_hash::FxHashMap<&str, String> {
     process_groups
         .iter()
-        .map(|group| (group.pg_name.as_str(), axis_source(group).into_owned()))
+        .map(|group| (group.pg_name.as_str(), axis_source(group).to_string()))
         .collect()
 }
 
@@ -257,23 +257,14 @@ pub(crate) fn pg_group_id(pg_name: &str) -> String {
 /// Group physical process groups by their trace-provided semantic axis.
 /// What a group's axis is derived from: its description, else its name.
 /// Groups created without a description (plain `new_group` leaves PyTorch's
-/// default "undefined") are split by size and rank stride, so e.g. TP pairs
-/// and DP pairs don't land in one axis and get compared with each other.
-fn axis_source(config: &ProcessGroupConfig) -> std::borrow::Cow<'_, str> {
-    if config.pg_desc.is_empty() {
-        return config.pg_name.as_str().into();
+/// default "undefined") are each their own axis, by name: nothing says which
+/// of them belong together.
+fn axis_source(config: &ProcessGroupConfig) -> &str {
+    if config.pg_desc.is_empty() || config.pg_desc == "undefined" {
+        &config.pg_name
+    } else {
+        &config.pg_desc
     }
-    if config.pg_desc != "undefined" {
-        return config.pg_desc.as_str().into();
-    }
-    let mut ranks = config.ranks.clone();
-    ranks.sort_unstable();
-    let stride = match ranks.as_slice() {
-        [a, b, ..] if ranks.windows(2).all(|w| w[1] - w[0] == b - a) => format!("_stride{}", b - a),
-        [_, _, ..] => "_mixed".to_string(),
-        _ => String::new(),
-    };
-    format!("undefined_size{}{stride}", config.pg_size).into()
 }
 
 pub(crate) fn process_group_axes(
@@ -281,7 +272,7 @@ pub(crate) fn process_group_axes(
 ) -> std::collections::BTreeMap<String, Vec<&ProcessGroupConfig>> {
     let mut axes = std::collections::BTreeMap::new();
     for config in configs {
-        let para_type = extract_comm_type(&axis_source(config));
+        let para_type = extract_comm_type(axis_source(config));
         let axis = sanitize_axis(para_type.strip_prefix("mesh_").unwrap_or(&para_type));
         if !axis.is_empty() {
             axes.entry(axis).or_insert_with(Vec::new).push(config);
@@ -305,7 +296,7 @@ fn trace_rank_info(process_groups: &[ProcessGroupConfig]) -> RankInfo {
         .map(|(axis, configs)| {
             let mut para_types = configs
                 .into_iter()
-                .map(|config| extract_comm_type(&axis_source(config)))
+                .map(|config| extract_comm_type(axis_source(config)))
                 .filter(|value| !value.is_empty())
                 .collect::<Vec<_>>();
             para_types.sort();
@@ -320,7 +311,7 @@ fn event_comm_type(
     pg_name: &str,
     process_group_descriptions: &rustc_hash::FxHashMap<&str, String>,
 ) -> String {
-    // An "undefined" description is split by the group's layout, which only
+    // An "undefined" description means the group goes by its name, which
     // the PG inventory knows.
     if pg_desc != "undefined" {
         let desc = extract_comm_type(pg_desc);
@@ -1588,7 +1579,7 @@ mod process_group_tests {
     }
 
     #[test]
-    fn undescribed_groups_split_by_size_and_stride() {
+    fn undescribed_groups_are_each_their_own_axis() {
         let group = |name: &str, ranks: Vec<i64>| ProcessGroupConfig {
             pg_name: name.into(),
             pg_desc: "undefined".into(),
@@ -1600,17 +1591,10 @@ mod process_group_tests {
             group("1", vec![0, 1]),
             group("2", vec![2, 3]),
             group("21", vec![0, 4]),
-            group("30", vec![0, 1, 2, 3]),
         ];
-        let axes: Vec<String> = process_group_axes(&configs).into_keys().collect();
-        assert_eq!(
-            axes,
-            [
-                "undefined_size2_stride1",
-                "undefined_size2_stride4",
-                "undefined_size4_stride1"
-            ]
-        );
+        let axes = process_group_axes(&configs);
+        assert_eq!(axes.len(), 3, "{:?}", axes.keys().collect::<Vec<_>>());
+        assert!(axes.values().all(|groups| groups.len() == 1));
     }
 
     #[test]
