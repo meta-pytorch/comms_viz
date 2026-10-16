@@ -1264,6 +1264,17 @@ fn readme(s: &serde_json::Value) -> String {
          flags on the rank, which a cause usually has and a waiting rank usually doesn't.\n",
         f(&st["suspects"])
     );
+    let lost_pct = q["nccl_time_without_pg_metadata_pct"]
+        .as_f64()
+        .unwrap_or(0.0);
+    if lost_pct >= 25.0 {
+        let _ = writeln!(
+            out,
+            "**Caution:** {}% of NCCL kernel time has no process-group metadata and is not in \
+             this table; the straggler of those collectives may be another rank.\n",
+            f(&json!(lost_pct))
+        );
+    }
     let _ = writeln!(
         out,
         "| rank | host | last / collectives | expected | z | mean lag | also | last by axis |\n|---|---|---|---|---|---|---|---|"
