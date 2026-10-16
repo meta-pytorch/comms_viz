@@ -110,10 +110,13 @@ appears in a group's timeline only if it carries the process-group metadata.
 - **GPU/CPU utilization.** Per rank, over its GPU window: union of all GPU
   kernel and memcpy time, union of compute kernel time, and CPU time in ops
   and CUDA calls.
-- **GPU counter stats.** Per rank and counter (SM activity, DRAM and NVLink
-  bandwidth, ...): min, p10, p50, mean, p90, p99, max and std over the
-  capture, when the trace has counters. The samples themselves are not kept:
-  at fleet scale they would outweigh every other table.
+- **GPU counters.** When the trace has counters (SM activity, DRAM and NVLink
+  bandwidth, ...): a heatmap with one row per rank, each rank's samples cut
+  into 64 time bins on the timeline's axis and colored by one chosen
+  statistic of the bin (min, p1, p50, p99 or max), and a table of each
+  rank's min, p10, p50, mean, p90, p99, max and std over the capture. The
+  samples themselves are not kept: at fleet scale they would outweigh every
+  other table.
 
 ## Outputs
 
@@ -124,6 +127,7 @@ appears in a group's timeline only if it carries the process-group metadata.
       breakdown.parquet          Breakdown tab, one row per rank
       per_pg/<axis>_<pg>.dpg     one group's comm kernels, all ranks
       per_pg/diagnostics_0.dpg   utilization, unannotated comm kernels, GPU counter stats
+      per_pg/diagnostics_pm_<n>.dpg   GPU counter time bins of ranks 32n..32n+31
     pg_map.json                  axis -> group -> ranks
     rank_map.json                analyzed rank -> trace file and host
     metadata.json                capture info and run environment
