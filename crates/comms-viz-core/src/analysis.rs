@@ -120,25 +120,6 @@ fn extract_comm_type_impl(
     s.to_string()
 }
 
-/// Contains-any-substring matcher over a fixed set of literal patterns.
-struct AnyLiteral {
-    ac: aho_corasick::AhoCorasick,
-}
-
-impl AnyLiteral {
-    fn new(pats: &[&'static str]) -> Self {
-        // Single-pass automaton == `pats.iter().any(|p| s.contains(p))`,
-        // which burned ~4% of rank-loop cycles as 35 separate substring
-        // scans per row.
-        AnyLiteral {
-            ac: aho_corasick::AhoCorasick::new(pats).unwrap(),
-        }
-    }
-    fn is_match(&self, s: &str) -> bool {
-        self.ac.is_match(s)
-    }
-}
-
 #[derive(Clone, Copy)]
 struct NameInfo {
     kernel_type: &'static str,
@@ -146,25 +127,6 @@ struct NameInfo {
     all_gather: bool,
     reduce_scatter: bool,
     all_reduce: bool,
-}
-
-/// Contains-any matcher for one pg_type's extra patterns. The pattern sets
-/// are `&'static` table data, so the automata are built once per process and
-/// looked up by the pattern slice's identity.
-fn extra_matcher(extra: &'static [&'static str]) -> &'static AnyLiteral {
-    static M: std::sync::OnceLock<std::sync::Mutex<Vec<(usize, &'static AnyLiteral)>>> =
-        std::sync::OnceLock::new();
-    let cache = M.get_or_init(|| std::sync::Mutex::new(Vec::new()));
-    let key = extra.as_ptr() as usize;
-    let mut g = cache.lock().unwrap();
-    if let Some((_, m)) = g.iter().find(|(k, _)| *k == key) {
-        return m;
-    }
-    // Leaked once per distinct pattern set (a fixed, tiny table) so the
-    // matcher can be handed out as `&'static`.
-    let m: &'static AnyLiteral = Box::leak(Box::new(AnyLiteral::new(extra)));
-    g.push((key, m));
-    m
 }
 
 /// First occurrence of the `ncclDevKernel` needle. `str::find(&str)` builds a
@@ -1239,21 +1201,16 @@ fn para_in_set<'a>(
 }
 
 /// Per-PG split of the filtered kernels (shared tail): one frame per
-/// `{axis}_{pg group id}`.
+/// `{axis}_{pg group id}`. Only kernels carrying process-group metadata are
+/// placed: a kernel recognized as communication by name alone (e.g. HybridEP,
+/// DeepEP, symmetric-memory barriers) has no group or sequence number, so it
+/// counts toward comm time but appears on no group timeline.
 fn pg_split(filt: &Filtered, rank: i64, ri: &RankInfo) -> Result<Vec<(String, DataFrame)>> {
     let n = filt.name.len();
     let mut pg_dfs: Vec<(String, DataFrame)> = Vec::new();
     if n == 0 {
         return Ok(pg_dfs);
     }
-
-    let all_para_types: std::collections::HashSet<&str> = ri
-        .iter()
-        .flat_map(|(_, para_types)| para_types.iter().map(String::as_str))
-        .collect();
-    let all_lowered: std::collections::HashSet<String> =
-        all_para_types.iter().map(|s| s.to_lowercase()).collect();
-    let mut all_memo: rustc_hash::FxHashMap<&str, bool> = rustc_hash::FxHashMap::default();
 
     for (pg_type, para_types) in ri {
         if para_types.is_empty() {
@@ -1278,30 +1235,7 @@ fn pg_split(filt: &Filtered, rank: i64, ri: &RankInfo) -> Result<Vec<(String, Da
                 )
             })
             .collect();
-        let extra = kernel_types::extra_patterns_for(pg_type);
-        let sel2 = if !extra.is_empty() {
-            // Name-based fallback only applies when no known process-group
-            // annotation claims the row. Otherwise shared kernel names such
-            // as symmetric-memory barriers leak from their annotated EP group
-            // into TP, FSDP, and CP views.
-            let matcher = extra_matcher(extra);
-            let sel2: Vec<u32> = (0..n as u32)
-                .filter(|&i| {
-                    matcher.is_match(&filt.name[i as usize])
-                        && !para_in_set(
-                            filt.para_type[i as usize].as_str(),
-                            &all_para_types,
-                            &all_lowered,
-                            &mut all_memo,
-                        )
-                })
-                .collect();
-            Some(sel2)
-        } else {
-            None
-        };
-        let mut selected = sel1;
-        selected.extend(sel2.unwrap_or_default());
+        let selected = sel1;
         if selected.is_empty() {
             continue;
         }
@@ -1440,21 +1374,16 @@ mod tests {
     }
 
     #[test]
-    fn unannotated_kernel_keeps_name_based_fallback() {
+    fn unannotated_kernel_is_on_no_group() {
+        // Recognized as communication by name, but with no process group to
+        // place it in or sequence number to match it by.
         let frames = pg_split(
             &one_kernel("_triton_a2a_v2_kernel", ""),
             0,
             &tp_ep_rank_info(),
         )
         .unwrap();
-
-        assert_eq!(
-            frames
-                .iter()
-                .map(|(name, _)| name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["tp_unnamed"]
-        );
+        assert!(frames.is_empty());
     }
 }
 

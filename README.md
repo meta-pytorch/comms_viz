@@ -84,10 +84,13 @@ rank's duration includes waiting for the others.
 ## Custom collectives
 
 PyTorch attaches process-group metadata only to c10d collectives. comms_viz also recognizes a few other
-collective libraries by kernel name (e.g. HybridEP, DeepEP) and counts their
-kernels as communication, but they appear on no group timeline and are not
-properly matched across ranks yet. comms_viz doesn't currently provide a clean API
-to extend to recognizing custom collective kernels, but we are currently working on this.
+collective libraries by kernel name (e.g. HybridEP, DeepEP, symmetric-memory
+barriers) and counts their kernels in each rank's communication time, but shows
+them on no group timeline: without a process group or sequence number, nothing in
+the trace says which group a kernel belongs to or which calls on other ranks it
+pairs with. Communication fused into compute kernels (e.g. Dist-MoE's grouped
+GEMMs) counts as compute. comms_viz doesn't currently provide a clean API to extend
+to recognizing custom collective kernels, but we are currently working on this.
 
 ## Provenance
 

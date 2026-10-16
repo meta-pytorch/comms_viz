@@ -84,14 +84,6 @@ pub fn extra_comm_kernel_patterns() -> &'static [(&'static str, Vec<&'static str
     })
 }
 
-pub fn extra_patterns_for(pg: &str) -> &'static [&'static str] {
-    extra_comm_kernel_patterns()
-        .iter()
-        .find(|(k, _)| *k == pg)
-        .map(|(_, v)| v.as_slice())
-        .unwrap_or(&[])
-}
-
 /// All comm-kernel patterns = base + order-preserving dedup flatten of the
 /// extra table values, in table entry order.
 pub fn all_comm_kernel_patterns() -> &'static [&'static str] {
