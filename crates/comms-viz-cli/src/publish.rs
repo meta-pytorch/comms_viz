@@ -231,6 +231,7 @@ fn load_run_data(tree: &ValidatedTree) -> Result<RunData> {
     ));
     warnings.extend(crate::diagnostics::step_warnings(&diagnostics));
     warnings.extend(crate::diagnostics::annotation_warnings(&diagnostics));
+    warnings.extend(crate::diagnostics::graph_annotation_warnings(&diagnostics));
 
     Ok(RunData {
         run_id: tree.run_id.clone(),

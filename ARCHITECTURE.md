@@ -59,14 +59,7 @@ Megatron's `TENSOR_MODEL_PARALLEL_GROUP`). A group created without a
 description (`new_group` leaves PyTorch's default `undefined`) is its own axis,
 named by its process-group name.
 
-DeviceMesh creates a separate process group per mesh for each axis, so a job that
-builds several meshes over the same devices can show several groups with the same
-axis and ranks. For example, TorchTitan has an FSDP storage mesh and a
-forward/backward mesh, so TP appears twice: one group carries the sequence-parallel
-all-gathers and reduce-scatters, the other the all-reduces for gradients of
-TP-replicated parameters such as norm weights. The trace doesn't record which mesh
-owns a group (every one is described as `mesh_<axis>`), so the page labels them
-`1/2`, `2/2`.
+DeviceMesh creates a separate process group per mesh for each axis, so a job that builds separate meshes (e.g. FSDP storage, compute) may show duplicate groups with the same name (e.g. `tp 1/2`, `tp 2/2`). In such cases the per-mesh collectives will be separated (e.g. one group timeline shows TP BWD all-reduces that FSDP runs, the other timeline shows FWD-BWD all-gather, reduce-scatter TP comms).
 
 ## Breakdown tab
 

@@ -975,12 +975,15 @@ fn diagnostics_df<'a>(
     Ok((DataFrame::new_infer_height(columns)?, bins))
 }
 
-/// Adds the rank's count of kernels on a process group, and of those with a
-/// c10d sequence number, to its diagnostics `activity` row (row 0): together
-/// they tell whether cross-rank matching had anything to work with.
+/// Adds to the rank's diagnostics `activity` row (row 0): its count of kernels
+/// on a process group and of those with a c10d sequence number (together:
+/// whether cross-rank matching had anything to work with), and of NCCL
+/// kernels without process-group metadata that are CUDA-graph replays
+/// (their capture annotations weren't exported or didn't resolve).
 fn add_group_kernel_counts(
     diagnostics: &mut DataFrame,
     pg_dfs: &[(String, DataFrame)],
+    filt: &Filtered,
 ) -> Result<()> {
     let (mut kernels, mut sequenced) = (0i64, 0i64);
     for (_, df) in pg_dfs {
@@ -989,8 +992,20 @@ fn add_group_kernel_counts(
             sequenced += (col.len() - col.null_count()) as i64;
         }
     }
+    let graph_bare = (0..filt.name.len())
+        .filter(|&i| {
+            filt.kernel[i]
+                && filt.pg_name[i].is_empty()
+                && filt.original_name[i].contains("nccl")
+                && filt.comm[i].graph_ids() != (None, None)
+        })
+        .count() as i64;
     let n = diagnostics.height();
-    for (name, v) in [("group_kernels", kernels), ("sequenced_kernels", sequenced)] {
+    for (name, v) in [
+        ("group_kernels", kernels),
+        ("sequenced_kernels", sequenced),
+        ("nccl_unannotated_graph", graph_bare),
+    ] {
         let mut col = vec![0i64; n];
         col[0] = v;
         diagnostics.with_column(Column::new(name.into(), col))?;
@@ -1216,7 +1231,7 @@ pub fn process(
     )?;
 
     let mut pg_dfs = pg_split(&filt, rank, &rank_info)?;
-    add_group_kernel_counts(&mut diagnostics, &pg_dfs)?;
+    add_group_kernel_counts(&mut diagnostics, &pg_dfs, &filt)?;
     pg_dfs.push((DIAGNOSTICS_PG.to_string(), diagnostics));
     if let Some(bins) = bins {
         pg_dfs.push((
@@ -1355,7 +1370,7 @@ pub fn process_view(
             }),
     )?;
     let mut pg_dfs = pg_split(&filt, rank, &rank_info)?;
-    add_group_kernel_counts(&mut diagnostics, &pg_dfs)?;
+    add_group_kernel_counts(&mut diagnostics, &pg_dfs, &filt)?;
     pg_dfs.push((DIAGNOSTICS_PG.to_string(), diagnostics));
     if let Some(bins) = bins {
         pg_dfs.push((
