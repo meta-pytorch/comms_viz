@@ -69,8 +69,11 @@ python3 gen_mesh_traces.py mesh --mesh pp=4,dp_shard=2,tp=2 --ep 2 --layers 2 --
 ## Scale
 
 Analysis time and peak memory of `comms_viz --trace-root <dir> --out <out>` (analysis,
-HTML report and structured report) on traces from `gen_mesh_traces.py`, ~84k events and
-~1 MB gzipped per rank, GPU counters and unannotated custom kernels included. Measured on
+HTML report and structured report) on traces from `gen_mesh_traces.py --kernels-per-compute
+100 --counters --custom-kernels` with the row's mesh and a few injected faults: 100 compute
+kernels per compute op of the simulated step, ~84k events and ~1 MB gzipped per rank, with
+GPU counters and unannotated custom kernels. Generation took 0.5-5 minutes with
+`--workers 300`; the traces are 13-57 GB. Measured on
 one 368-core, 2 TB host with comms_viz using every core; the memory gate sizes its
 concurrency to the host's memory, so peak RSS on a smaller host will be lower and runs
 slower.
@@ -81,17 +84,6 @@ slower.
 | 20,480 | 4 | 20 | 32 | 2 | 4 | 32 | 53,504 | 1:57 | 46 GB |
 | 45,056 | 8 | 22 | 32 | 2 | 4 | 16 | 124,544 | 5:05 | 82 GB |
 | 49,152 | 4 | 24 | 64 | 2 | 4 | 32 | 127,232 | 4:42 | 87 GB |
-
-Each run's traces came from `gen_mesh_traces.py` with the row's mesh, a few injected
-faults, and
-
-```sh
-python3 gen_mesh_traces.py OUT --mesh pp=4,dp_replicate=24,dp_shard=64,cp=2,tp=4 --ep 32 \
-    --kernels-per-compute 100 --workers 300 --counters --custom-kernels
-comms_viz --trace-root OUT/step_000000000010 --out OUT_analysis
-```
-
-Generation took 0.5-5 minutes; the traces are 13-57 GB.
 
 At 49k ranks parsing the traces takes ~45 s; the rest is writing the per-group tables
 (about two files per process group) and moving them into place, which scales with the
