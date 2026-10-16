@@ -171,21 +171,28 @@ fn from_path(path: &Path) -> Result<Diagnostics> {
 /// on no group timeline and in no cross-rank statistic.
 pub(crate) const ANNOTATION_LOSS_SHARE: f64 = 0.01;
 
-/// "0-3,8,10-11"
+/// Ascending ranks as ranges and strides: `0-3,8,12-60:4` (`a-b:s` is every
+/// s-th rank from a to b), so strided groups like a 256-rank FSDP group stay
+/// one token.
 pub(crate) fn rank_ranges(ranks: &[i64]) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut i = 0;
     while i < ranks.len() {
         let mut j = i;
-        while j + 1 < ranks.len() && ranks[j + 1] == ranks[j] + 1 {
-            j += 1;
+        if i + 1 < ranks.len() {
+            let stride = ranks[i + 1] - ranks[i];
+            while j + 1 < ranks.len() && ranks[j + 1] - ranks[j] == stride {
+                j += 1;
+            }
+            if j - i < 2 && stride != 1 {
+                j = i;
+            }
         }
-        out.push(if j > i + 1 {
-            format!("{}-{}", ranks[i], ranks[j])
-        } else if j == i + 1 {
-            format!("{},{}", ranks[i], ranks[j])
-        } else {
-            ranks[i].to_string()
+        out.push(match j - i {
+            0 => ranks[i].to_string(),
+            1 => format!("{},{}", ranks[i], ranks[j]),
+            _ if ranks[i + 1] - ranks[i] == 1 => format!("{}-{}", ranks[i], ranks[j]),
+            _ => format!("{}-{}:{}", ranks[i], ranks[j], ranks[i + 1] - ranks[i]),
         });
         i = j + 1;
     }
@@ -239,7 +246,13 @@ mod tests {
     #[test]
     fn rank_lists_are_ranges_cut_at_a_limit() {
         assert_eq!(rank_ranges(&[0, 1, 2, 3, 5, 7, 8]), "0-3,5,7,8");
-        assert_eq!(ranks_short(&[0, 2, 4, 6], 2), "0,2,... (4 ranks)");
+        assert_eq!(rank_ranges(&[0, 1, 4, 8, 12, 16]), "0,1,4-16:4");
+        assert_eq!(rank_ranges(&[3, 7]), "3,7");
+        assert_eq!(rank_ranges(&[]), "");
+        assert_eq!(
+            ranks_short(&[0, 2, 4, 6, 9, 11], 2),
+            "0-6:2,9,... (6 ranks)"
+        );
     }
 
     #[test]

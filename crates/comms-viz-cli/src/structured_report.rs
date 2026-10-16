@@ -29,7 +29,7 @@ use serde_json::json;
 use crate::diagnostics::Activity;
 use crate::diagnostics::Diagnostics;
 use crate::diagnostics::num;
-use crate::diagnostics::rank_ranges;
+use crate::diagnostics::ranks_short;
 use crate::diagnostics::table_from_csv;
 use crate::diagnostics::table_from_member;
 use crate::publish::RunData;
@@ -739,7 +739,7 @@ fn build_summary(
         let group_ref = |i: usize| {
             json!({
                 "group": aliases[i],
-                "ranks": rank_ranges(&groups[i].ranks),
+                "ranks": ranks_short(&groups[i].ranks, 8),
                 "pg": groups[i].stem,
             })
         };
@@ -823,10 +823,11 @@ fn build_summary(
         .collect();
 
     // Ranks that sit in slow groups more often than not: a slow link or
-    // node shows up as every group it touches being slow.
+    // node shows up as every group it touches being slow, while its peers
+    // share only the groups they have with it.
     let mut slow_ranks: Vec<(i64, u32, u32)> = slow_groups_of_rank
         .iter()
-        .filter(|(_, (n, slow))| *slow > 0 && 2 * slow >= *n)
+        .filter(|(_, (n, slow))| 2 * slow > *n)
         .map(|(r, (n, slow))| (*r, *slow, *n))
         .collect();
     slow_ranks.sort_by(|a, b| {
@@ -933,7 +934,7 @@ fn build_summary(
         .take(TOP)
         .map(|((metric, host), ranks)| {
             let ranks: Vec<i64> = ranks.iter().copied().collect();
-            json!({"host": host, "metric": metric, "ranks": rank_ranges(&ranks), "of": ranks_per_host[host.as_str()]})
+            json!({"host": host, "metric": metric, "ranks": ranks_short(&ranks, 8), "of": ranks_per_host[host.as_str()]})
         })
         .collect();
 
@@ -1027,7 +1028,8 @@ fn readme(s: &serde_json::Value) -> String {
         out,
         "run id `{}`, step {}, {} ranks on {} hosts, {} process groups. Times are us, \
          bandwidth GB/s (nccl-tests busbw). Every table is a top-{TOP} or a distribution; \
-         `summary.json` has the same content.\n",
+         `summary.json` has the same content. Rank lists use `a-b` for ranges and `a-b:s` \
+         for every s-th rank.\n",
         f(&run["run_id"]),
         f(&run["step"]),
         f(&run["ranks"]),
@@ -1147,7 +1149,7 @@ fn readme(s: &serde_json::Value) -> String {
     let _ = writeln!(
         out,
         "A group is slow when its median busbw is under {:.0}% of its axis' median for the \
-         same collective. Ranks in slow groups at least half the time: {}. A slow node or \
+         same collective. Ranks in slow groups more than half the time: {}. A slow node or \
          link makes every group it is in slow.\n",
         SLOW_GROUP_SHARE * 100.0,
         f(&sr["count"])
@@ -1494,12 +1496,6 @@ mod tests {
             ["tp1", "tp0", "fsdp", "default_0", "tp_short"],
             "tp groups are numbered by lowest rank; a lone prefix and non-hash stems keep their names"
         );
-    }
-
-    #[test]
-    fn formats_rank_ranges() {
-        assert_eq!(rank_ranges(&[0, 1, 2, 3, 5, 7, 8]), "0-3,5,7,8");
-        assert_eq!(rank_ranges(&[]), "");
     }
 
     #[test]
