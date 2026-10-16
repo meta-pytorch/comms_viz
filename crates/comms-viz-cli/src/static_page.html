@@ -2353,7 +2353,8 @@ const pl = {
       if (b.t0 + b.w < lo || b.t0 > lo + span) continue;
       vmin = Math.min(vmin, b[stat]); vmax = Math.max(vmax, b[stat]);
     }
-    if (metric.includes("%")) { vmin = 0; vmax = 100; }
+    // Scaled to the visible values (the legend gives the range): a fixed
+    // 0-100 for percentages washed out the differences that matter.
     if (!(vmax > vmin)) { vmax = vmin + 1; }
     // Dark blue (low) to yellow (high).
     const color = (v) => {
