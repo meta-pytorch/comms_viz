@@ -1206,7 +1206,7 @@ fn readme(s: &serde_json::Value) -> String {
     }
     let _ = writeln!(
         out,
-        "- Communication kernels outside c10d (HybridEP, DeepEP, vLLM custom all-reduce, \
+        "- Communication kernels outside c10d (HybridEP, DeepEP, symm_mem barriers, \
          ...), which never carry its metadata: {}",
         f(&q["other_comm_kernels_without_pg_metadata"])
     );

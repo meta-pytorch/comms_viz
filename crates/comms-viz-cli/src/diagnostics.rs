@@ -259,13 +259,10 @@ pub(crate) fn annotation_warnings(diag: &Diagnostics) -> Vec<String> {
         0.0
     };
     vec![format!(
-        "{} of {} ranks have NCCL kernels without process-group metadata ({bare} of their \
-         {total} NCCL kernels, {share:.0}% of their NCCL kernel time; ranks {}). Those \
-         kernels count as communication time but are on no group timeline and in no \
-         cross-rank statistic. Common causes: p2p from batch_isend_irecv, which PyTorch does \
-         not annotate; NCCL called directly instead of through c10d (e.g. DeepSpeed \
-         DeepCompile, vLLM's PyNccl); or CUDA-graph replays whose capture annotations did not \
-         resolve (see README, CUDA graphs).",
+        "{} of {} ranks have NCCL kernels without process-group metadata ({share:.0}% of \
+         their NCCL kernel time, {bare} of {total} kernels; ranks {}): counted as \
+         communication, but on no group timeline and in no cross-rank statistic. See README, \
+         Limitations.",
         flagged.len(),
         diag.activity.len(),
         ranks_short(&ranks, 20)

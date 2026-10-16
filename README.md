@@ -98,6 +98,33 @@ pairs with. Communication fused into compute kernels (e.g. Dist-MoE's grouped
 GEMMs) counts as compute. comms_viz doesn't currently provide a clean API to extend
 to recognizing custom collective kernels, but we are currently working on this.
 
+## Limitations
+
+- **Communication without c10d metadata.** comms_viz attributes a kernel to a process
+  group, and matches it across ranks, only through the metadata PyTorch's c10d attaches.
+  NCCL kernels without it count as communication time but appear on no group timeline and
+  in no cross-rank statistic; comms_viz warns with the affected ranks and their share of
+  NCCL time. Known sources:
+  - p2p batched with `batch_isend_irecv` (e.g. Megatron pipeline and Transformer Engine
+    context-parallel send/recv): the CPU-side ops are annotated, the batch's kernel isn't;
+  - NCCL called directly rather than through c10d (e.g. DeepSpeed DeepCompile, vLLM's
+    PyNccl);
+  - CUDA-graph replays whose capture annotations are missing (see CUDA graphs).
+- **Kernels comms_viz doesn't know.** Collective kernels outside NCCL that are not in
+  comms_viz's short list of known libraries (see Custom collectives), e.g. Transformer
+  Engine userbuffers or vLLM custom all-reduce, count as compute.
+- **Sequence numbers.** Cross-rank matching needs the c10d sequence number on each
+  collective kernel: PyTorch before 2.12 doesn't record it, and some collectives (e.g.
+  symm_mem ops) never have one. p2p is never matched (see Collectives across ranks).
+- **Axes.** A process group's axis comes from its description: DeviceMesh names them
+  (`mesh_tp` -> `tp`), as do frameworks with their own names (Megatron's
+  `TENSOR_MODEL_PARALLEL_GROUP`). Groups created without a description (`new_group`'s
+  default `undefined`) are told apart only by size and rank stride, so two kinds of group
+  with the same layout share an axis. Group membership comes from the trace either way.
+- **Partial captures.** Any subset of ranks can be analyzed; cross-rank statistics cover
+  only collectives whose whole group is present, and the report says how many ranks it
+  covers. All ranks should capture the same profiler step; comms_viz warns when they don't.
+
 ## Provenance
 
 comms_viz is an entirely AI-written codebase, with human direction over its

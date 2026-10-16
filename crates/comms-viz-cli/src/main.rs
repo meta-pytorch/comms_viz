@@ -178,6 +178,19 @@ fn main() -> Result<()> {
         std::env::set_var("RUST_MIN_STACK", (64usize << 20).to_string());
     }
     let args = Args::parse();
+    // Thread pools sized to the job: rayon (per-rank work) and polars (table
+    // work) default to every core, and on a few ranks most of those threads
+    // only spin (8 ranks on 368 cores: 0.5 s wall, 39 CPU-seconds, and much
+    // slower on a loaded host). Read at each pool's first use, so set before
+    // any work; explicit settings win.
+    let threads = args
+        .threads
+        .unwrap_or_else(|| default_threads(args.trace_root.as_deref()));
+    for var in ["RAYON_NUM_THREADS", "POLARS_MAX_THREADS"] {
+        if std::env::var_os(var).is_none() {
+            std::env::set_var(var, threads.to_string());
+        }
+    }
     if args.convert_pftrace.is_some() {
         let trace_root = args
             .trace_root
@@ -215,6 +228,18 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Default worker threads: every core, but no more than twice the number of
+/// trace files (at least 8), since ranks are the unit of parallel work.
+fn default_threads(trace_root: Option<&std::path::Path>) -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
+    let files = trace_root
+        .and_then(|root| std::fs::read_dir(root).ok())
+        .map_or(usize::MAX / 2, |entries| entries.count());
+    cores.min((2 * files).max(8))
+}
+
 /// Analyze one trace directory into `--out` under `run_id`; returns how
 /// many ranks failed.
 fn analyze(args: &Args, trace_root: PathBuf, run_id: &str) -> Result<usize> {
@@ -224,11 +249,9 @@ fn analyze(args: &Args, trace_root: PathBuf, run_id: &str) -> Result<usize> {
     };
     eprintln!("comms_viz: annotations={}", annotation_mode.as_str());
 
-    let threads = args.threads.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(8)
-    });
+    let threads = args
+        .threads
+        .unwrap_or_else(|| default_threads(Some(&trace_root)));
 
     if let Some(out_dir) = args.convert_pftrace.clone() {
         return convert_pftrace::run(convert_pftrace::ConvertArgs {
