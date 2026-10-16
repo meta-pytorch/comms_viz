@@ -1608,7 +1608,7 @@ function fuzzyMatch(q, s, ls = s.toLowerCase()) {
 // Enter or click picks, Esc/blur restores `current()`.
 function typeahead(input, list, options, current, onPick) {
   const MAX = 100;
-  let matches = [], active = -1, collapsed = false, optionCount = 0;
+  let matches = [], active = -1, collapsed = false, optionCount = 0, lastQuery = "";
   const commit = (v) => { onPick(v); input.value = v; input.blur(); };
   const refresh = () => {
     list.textContent = "";
@@ -1636,6 +1636,7 @@ function typeahead(input, list, options, current, onPick) {
   };
   let lowered = null, loweredFor = null, pending = 0;
   const search = (q) => {
+    lastQuery = q;
     matches = [];
     collapsed = !q;
     const values = typeof options === "function" ? options() : options;
@@ -1699,6 +1700,8 @@ function typeahead(input, list, options, current, onPick) {
       input.blur();
     }
   });
+  // Re-run the open list's search, e.g. once option labels change.
+  return { refresh: () => { if (list.style.display !== "none") search(lastQuery); } };
 }
 // --- parallelism ---------------------------------------------------------------
 const pl = {
@@ -1713,7 +1716,9 @@ const pl = {
   // Sorted once per label set: the picker asks on every focus and keystroke,
   // and a 50k-rank run has ~100k groups.
   stems() {
-    const key = `${GROUPS.length}:${RAW.per_pg.length}:${STEM_LABEL.size}`;
+    // Every stem has a placeholder label from the start; the rank-list
+    // labels arrive with the pg_map island (PGM).
+    const key = `${GROUPS.length}:${RAW.per_pg.length}:${PGM ? 1 : 0}`;
     if (this._stemsKey !== key) {
       const stems = GROUPS.length ? GROUPS.map((g) => g.stem) : RAW.per_pg.map(([s]) => s);
       const axis = new Map(stems.map((st) => [st, stemLabel(st).replace(/ \(r .*$/, "")]));
@@ -1732,10 +1737,16 @@ const pl = {
   },
   init() {
     const input = document.getElementById("pl-group");
-    // pgmReady() installs the rank labels once the trailing island parses.
-    typeahead(input, document.getElementById("pl-group-list"),
-      () => { pgmReady(); return this.groupLabels(); }, () => stemLabel(this.stem),
-      (label) => this.load(labelStem(label)));
+    // pgmReady() installs the rank labels once the trailing island parses;
+    // until then the options are raw stems, so refresh when it lands.
+    this.picker = typeahead(input, document.getElementById("pl-group-list"),
+      () => {
+        // Only while the labels are still missing: labelsReady() refreshes
+        // the list, which asks for the options again.
+        if (!PGM) pgmReady().then((pgm) => pgm && this.labelsReady());
+        return this.groupLabels();
+      },
+      () => stemLabel(this.stem), (label) => this.load(labelStem(label)));
     document.getElementById("pl-reset").addEventListener("click", () => { this.domain = null; this.draw(); });
     document.getElementById("pl-flash").addEventListener("change", () => this.build());
     document.getElementById("pl-imb-toggle").addEventListener("change", (e) => {
@@ -1786,6 +1797,14 @@ const pl = {
       stems.find((s) => aliases.has(s.replace(/_\d+$/, ""))) || stems[0];
     this.load(first);
     document.getElementById("pl-group").value = stemLabel(first);
+    pgmReady().then((pgm) => pgm && this.labelsReady());
+  },
+  // Group labels (rank lists) arrived: show them in place of raw stems in
+  // the input and in an open picker list.
+  labelsReady() {
+    const input = document.getElementById("pl-group");
+    if (document.activeElement === input) this.picker?.refresh();
+    else if (this.stem) input.value = stemLabel(this.stem);
   },
   status(kids) {
     document.getElementById("pl-status").replaceChildren(...(kids || []));
@@ -2534,10 +2553,9 @@ function redrawAll() { bd.draw(); pl.draw(); }
   // path, so the PG calculator answers instantly when first used. Group
   // labels come from the island too, so an input filled before it parsed
   // still shows the raw stem until now.
-  (window.requestIdleCallback || setTimeout)(() => pgmReady().then(() => {
-    const input = document.getElementById("pl-group");
-    if (pl.stem && document.activeElement !== input) input.value = stemLabel(pl.stem);
-  }));
+  // The timeout keeps a busy page (large runs) from postponing it for long.
+  (window.requestIdleCallback || setTimeout)(() => pgmReady().then((pgm) => pgm && pl.labelsReady()),
+    { timeout: 1000 });
 })();
 </script>
 <script id="comms_viz-pgmap" type="application/json">__COMMS_VIZ_PGMAP__</script>
