@@ -155,16 +155,6 @@ fn summary_finds_the_injected_faults() {
         .map(|r| r["rank"].as_i64().unwrap())
         .collect();
     assert_eq!(slow, (12..16).collect(), "{:#}", s["ranks_in_slow_groups"]);
-    assert!(
-        s["host_outliers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|h| { h["host"] == "node00003" && h["metric"] == "SM Active (%) mean low" }),
-        "{:#}",
-        s["host_outliers"]
-    );
-
     let q = &s["data_quality"];
     assert_eq!(q["ranks_losing_pg_metadata"], 1);
     assert_eq!(q["worst_ranks_losing_pg_metadata"][0]["rank"], 2);

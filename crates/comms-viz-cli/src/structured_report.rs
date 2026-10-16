@@ -946,18 +946,8 @@ fn build_summary(
     }
     metrics.extend(counter_metrics);
     let mut outlier_docs = Vec::new();
-    let mut flagged_by_host: BTreeMap<(String, String), BTreeSet<i64>> = BTreeMap::new();
     for (name, values) in &metrics {
         let (median, flagged) = outliers(values);
-        for (rank, _, z) in &flagged {
-            if let Some(host) = host_of(*rank) {
-                let dir = if *z < 0.0 { "low" } else { "high" };
-                flagged_by_host
-                    .entry((format!("{name} {dir}"), host))
-                    .or_default()
-                    .insert(*rank);
-            }
-        }
         if flagged.is_empty() {
             continue;
         }
@@ -974,21 +964,6 @@ fn build_summary(
         *m.entry(h.as_str()).or_default() += 1;
         m
     });
-    let host_docs: Vec<serde_json::Value> = flagged_by_host
-        .iter()
-        // With one host, "most of its ranks" is just "most ranks", e.g. a
-        // pipeline stage; that is not a host problem.
-        .filter(|((_, host), ranks)| {
-            ranks_per_host.len() > 1
-                && ranks.len() >= 2
-                && 2 * ranks.len() > ranks_per_host[host.as_str()]
-        })
-        .take(TOP)
-        .map(|((metric, host), ranks)| {
-            let ranks: Vec<i64> = ranks.iter().copied().collect();
-            json!({"host": host, "metric": metric, "ranks": ranks_short(&ranks, 8), "of": ranks_per_host[host.as_str()]})
-        })
-        .collect();
 
     let compute_high: HashSet<i64> = metrics
         .iter()
@@ -1137,7 +1112,6 @@ fn build_summary(
             })).collect::<Vec<_>>(),
         },
         "outliers": outlier_docs,
-        "host_outliers": host_docs,
         "axes": axis_docs,
         "axes_total": axes_total,
     })
@@ -1365,24 +1339,6 @@ fn readme(s: &serde_json::Value) -> String {
             f(&o["flagged_ranks"])
         );
     }
-    let hosts = s["host_outliers"].as_array().cloned().unwrap_or_default();
-    if !hosts.is_empty() {
-        let _ = writeln!(
-            out,
-            "\nHosts where most ranks are outliers on one metric:\n"
-        );
-        for h in &hosts {
-            let _ = writeln!(
-                out,
-                "- {}: {} (ranks {} of {})",
-                f(&h["host"]),
-                f(&h["metric"]),
-                f(&h["ranks"]),
-                f(&h["of"])
-            );
-        }
-    }
-
     let _ = writeln!(out, "\n## Axes\n");
     let listed = s["axes"].as_array().map_or(0, Vec::len);
     let total = s["axes_total"].as_u64().unwrap_or(0) as usize;
