@@ -519,6 +519,11 @@ fn write(path: &Path, text: &str) -> Result<()> {
 /// Write one run's structured report into `dest/<stem>/`.
 pub(crate) fn write_structured_report(data: &RunData, stem: &str, dest: &Path) -> Result<()> {
     let dir = dest.join(stem);
+    // Start empty: a rerun can drop groups or optional tables, whose files
+    // from the previous run would otherwise remain.
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).with_context(|| format!("clear {}", dir.display()))?;
+    }
     let groups_dir = dir.join("groups");
     std::fs::create_dir_all(&groups_dir)
         .with_context(|| format!("create {}", groups_dir.display()))?;
