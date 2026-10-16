@@ -143,13 +143,14 @@ To re-render the reports for the same run without re-running analysis,
 run comms_viz without `--trace-root`, the reports will be built only from `tree/`.
 
 The structured report summarizes the run without growing with world size:
-every list is a top-K or a distribution. It covers data quality (kernels
-without process-group metadata, calls left out of matching), utilization
-across ranks, stragglers (how often each rank starts a matched collective
-last, against chance, over all its groups), ranks in slow groups (median
-bus bandwidth well under the axis median), per-rank outliers by robust
-z-score with hosts where most ranks are outliers, and per axis the start
-spread and bandwidth distributions with the worst groups and collectives.
+every list is a top-K or a distribution of measured values, with no
+thresholds or verdicts. It covers data quality (kernels without
+process-group metadata, calls left out of matching), utilization across
+ranks, stragglers (ranks sorted by how often they start a matched collective
+last, against chance, over all their groups), per metric the median and the
+lowest and highest ranks, and per axis the start spread and bandwidth
+distributions with the worst collectives and the groups with the lowest
+bandwidth.
 
 ## CUDA graphs
 
