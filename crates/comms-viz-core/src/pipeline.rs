@@ -32,7 +32,7 @@ use crate::trace::{self};
 pub struct RunConfig {
     pub trace_root: PathBuf,
     /// Trace-source URI recorded in the artifacts (metadata.json
-    /// trace_folder_path, the flat 1009 doc, _meta/config.json trace_root)
+    /// trace_folder_path, _meta/config.json trace_root)
     /// in place of `trace_root`, for when `trace_root` is a temporary copy
     /// of the traces. File access always uses `trace_root`.
     /// None → record `trace_root` itself.

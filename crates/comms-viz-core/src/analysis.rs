@@ -809,6 +809,38 @@ struct DiagnosticEvent<'a> {
     annotated_collective: bool,
 }
 
+/// GPU counter that Cuspy samples once per kernel rather than over time, so
+/// its distribution describes the kernel mix, not the GPU's state.
+const PER_KERNEL_COUNTER: &str = "Cycles (Current Kernel)";
+
+/// Summary statistics of one GPU counter on one rank, in `PM_STATS` order.
+fn counter_stats(values: &mut [f64]) -> [f64; 9] {
+    values.sort_by(f64::total_cmp);
+    let n = values.len() as f64;
+    let at = |p: f64| values[((p * n).ceil() as usize).clamp(1, values.len()) - 1];
+    let mean = values.iter().sum::<f64>() / n;
+    let var = values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / n;
+    [
+        n,
+        values[0],
+        at(0.10),
+        at(0.50),
+        mean,
+        at(0.90),
+        at(0.99),
+        values[values.len() - 1],
+        var.sqrt(),
+    ]
+}
+
+/// Stat columns of the `pm` rows of the diagnostics member.
+pub const PM_STATS: [&str; 9] = ["n", "min", "p10", "p50", "mean", "p90", "p99", "max", "std"];
+
+/// One rank's diagnostics: an `activity` row (GPU busy / compute / CPU time
+/// over the GPU window, and counts of communication kernels without c10d
+/// process-group metadata) and one `pm` row of summary stats per GPU
+/// counter. Counter samples themselves are not kept: at fleet scale they
+/// outweigh every other table combined.
 fn diagnostics_df<'a>(
     rank: i64,
     events: impl Iterator<Item = DiagnosticEvent<'a>>,
@@ -816,24 +848,36 @@ fn diagnostics_df<'a>(
     let mut gpu = Vec::new();
     let mut compute = Vec::new();
     let mut cpu = Vec::new();
-    let mut counters = Vec::new();
+    let mut counters: std::collections::BTreeMap<&str, Vec<f64>> = Default::default();
+    // NCCL kernels should all carry c10d metadata; those without it lost
+    // their annotation (e.g. CUDA-graph replays without capture
+    // annotations). Other communication kernels (HybridEP, DeepEP, ...)
+    // never carry it.
+    let (mut nccl, mut nccl_bare, mut other_bare) = (0u64, 0u64, 0u64);
     for event in events {
         let span = (event.ts, event.ts + event.dur);
         if matches!(event.cat, "kernel" | "gpu_memcpy" | "gpu_memset") {
             gpu.push(span);
         }
-        if event.cat == "kernel"
-            && !event.annotated_collective
-            && kernel_types::get_kernel_type(event.name) == KT_COMPUTATION
-        {
-            compute.push(span);
+        if event.cat == "kernel" {
+            let kind = kernel_types::get_kernel_type(event.name);
+            if !event.annotated_collective && kind == KT_COMPUTATION {
+                compute.push(span);
+            }
+            let is_nccl = event.name.starts_with("nccl") || event.name.contains(" nccl");
+            if is_nccl {
+                nccl += 1;
+                nccl_bare += u64::from(!event.annotated_collective);
+            } else if kind == KT_COMMUNICATION && !event.annotated_collective {
+                other_bare += 1;
+            }
         }
         if matches!(event.cat, "cpu_op" | "cuda_runtime" | "cuda_driver") {
             cpu.push(span);
         }
-        if event.ph == "C" {
+        if event.ph == "C" && event.name != PER_KERNEL_COUNTER {
             if let Some(value) = event.counter_value {
-                counters.push((event.name.to_string(), event.ts, value));
+                counters.entry(event.name).or_default().push(value);
             }
         }
     }
@@ -852,45 +896,46 @@ fn diagnostics_df<'a>(
     );
     let n = counters.len() + 1;
     let mut kind = Vec::with_capacity(n);
-    let mut ranks = Vec::with_capacity(n);
     let mut metric = Vec::with_capacity(n);
-    let mut ts = Vec::with_capacity(n);
-    let mut value = Vec::with_capacity(n);
-    let mut gpu_col = Vec::with_capacity(n);
-    let mut compute_col = Vec::with_capacity(n);
-    let mut cpu_col = Vec::with_capacity(n);
-    let mut window_col = Vec::with_capacity(n);
+    let mut stats: Vec<Vec<f64>> = vec![Vec::with_capacity(n); PM_STATS.len()];
     kind.push("activity".to_string());
-    ranks.push(rank as i32);
     metric.push(String::new());
-    ts.push(start);
-    value.push(0.0);
-    gpu_col.push(gpu_busy);
-    compute_col.push(compute_busy);
-    cpu_col.push(cpu_active);
-    window_col.push(window);
-    for (name, sample_ts, sample_value) in counters {
-        kind.push("pm".to_string());
-        ranks.push(rank as i32);
-        metric.push(name);
-        ts.push(sample_ts);
-        value.push(sample_value);
-        gpu_col.push(0.0);
-        compute_col.push(0.0);
-        cpu_col.push(0.0);
-        window_col.push(0.0);
+    for col in &mut stats {
+        col.push(0.0);
     }
-    Ok(DataFrame::new_infer_height(vec![
+    for (name, mut values) in counters {
+        kind.push("pm".to_string());
+        metric.push(name.to_string());
+        for (col, v) in stats.iter_mut().zip(counter_stats(&mut values)) {
+            col.push(v);
+        }
+    }
+    let first_only = |v: f64| {
+        let mut col = vec![0.0; n];
+        col[0] = v;
+        col
+    };
+    let first_only_u = |v: u64| {
+        let mut col = vec![0i64; n];
+        col[0] = v as i64;
+        col
+    };
+    let mut columns = vec![
         Column::new("kind".into(), kind),
-        Column::new("rank".into(), ranks),
+        Column::new("rank".into(), vec![rank as i32; n]),
         Column::new("metric".into(), metric),
-        Column::new("ts".into(), ts),
-        Column::new("value".into(), value),
-        Column::new("gpu_busy".into(), gpu_col),
-        Column::new("compute".into(), compute_col),
-        Column::new("cpu_active".into(), cpu_col),
-        Column::new("window".into(), window_col),
-    ])?)
+        Column::new("gpu_busy".into(), first_only(gpu_busy)),
+        Column::new("compute".into(), first_only(compute_busy)),
+        Column::new("cpu_active".into(), first_only(cpu_active)),
+        Column::new("window".into(), first_only(window)),
+        Column::new("nccl_kernels".into(), first_only_u(nccl)),
+        Column::new("nccl_unannotated".into(), first_only_u(nccl_bare)),
+        Column::new("other_comm_unannotated".into(), first_only_u(other_bare)),
+    ];
+    for (name, col) in PM_STATS.iter().zip(stats) {
+        columns.push(Column::new((*name).into(), col));
+    }
+    Ok(DataFrame::new_infer_height(columns)?)
 }
 
 fn filtered_kernels(cols: &ConvertedColumns, prep: &Prepared, names: &mut NameCache) -> Filtered {

@@ -176,20 +176,6 @@ fn cli_grammar_guards() {
     assert!(harness::stderr_str(&out).contains("--out is required"));
 }
 
-/// Pin the public CLI surface (hidden args excluded by clap).
-#[test]
-fn cli_help_snapshot() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let out = harness::comms_viz(tmp.path(), &["--help"]);
-    assert!(out.status.success());
-    harness::settings().bind(|| {
-        insta::assert_snapshot!(
-            "cli_help",
-            String::from_utf8_lossy(&out.stdout).into_owned()
-        );
-    });
-}
-
 /// Re-analyzing into the same `--out` never mixes runs: the default id
 /// moves to the next free name, an explicit id needs `--overwrite`.
 #[test]

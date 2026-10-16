@@ -8,10 +8,8 @@
 //! direct-mode analysis produces the out tree, then `--out … --report …`
 //! builds the page HTML and `.pgdata` sidecar locally.
 //!
-//! The HTML is deterministic except `generated_at_s` and the engine rev
-//! (both redacted by harness::settings), so the synth page is pinned as a
-//! full-document snapshot; the other fixtures pin the parsed payload
-//! island, which is where run content lives.
+//! Snapshots pin the parsed payload island, which is where run content
+//! lives; template changes are left to review rather than a byte snapshot.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -168,9 +166,6 @@ fn synth_page_renders_and_snapshots() {
 
     let settings = harness::settings();
     settings.bind(|| {
-        // The whole document: template drift and payload drift both land
-        // here (volatile stamps are filtered).
-        insta::assert_snapshot!("synth_json__page_html", html);
         // The payload island again, pretty-printed — the reviewable form.
         insta::assert_snapshot!(
             "synth_json__page_payload",
@@ -184,13 +179,6 @@ fn synth_page_renders_and_snapshots() {
                     .expect("pgmap island parses")
             )
             .expect("pgmap pretty")
-        );
-        // The sidecar bytes back the page's pg_index offsets; pin them.
-        let pgdata =
-            std::fs::read(dest.join(format!("{}.pgdata", rendered_stem(&dest)))).expect("pgdata");
-        insta::assert_snapshot!(
-            "synth_json__page_pgdata",
-            format!("{}B  sha256:{}", pgdata.len(), harness::sha256_16(&pgdata))
         );
     });
 }

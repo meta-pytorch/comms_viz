@@ -182,7 +182,7 @@ expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
       "diagnostics",
       [
         0,
-        236
+        276
       ]
     ],
     [
@@ -311,5 +311,6 @@ expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
     "version": 2,
     "workers_active": 0,
     "workers_done": 8
-  }
+  },
+  "warnings": []
 }

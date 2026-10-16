@@ -378,6 +378,7 @@ pub fn render(
         "config": data.config_json,
         "status": data.status_json,
         "metadata": data.metadata_json,
+        "warnings": data.warnings,
         "pg_summary": pg_summary(data),
         "breakdown": bd_value,
         "bd_preview": bd_preview,

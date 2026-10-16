@@ -303,11 +303,8 @@ fn source_trace_root_flows_from_config_to_artifacts() {
             .join("config.json"),
     );
     assert_eq!(config["trace_root"], uri);
-    let flat_1009 = read_json(
-        &out.join("flat")
-            .join(format!("test-run__results__{:04}.json", 1009)),
-    );
-    assert_eq!(flat_1009["trace_folder_path"], uri);
+    let metadata = read_json(&out.join("tree").join("test-run").join("metadata.json"));
+    assert_eq!(metadata["config"]["trace_folder_path"], uri);
 }
 
 fn status_path(out: &Path) -> PathBuf {

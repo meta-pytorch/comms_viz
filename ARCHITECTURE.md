@@ -89,9 +89,12 @@ plus a few known collective libraries) or if it carries both a
 appears in a group's timeline only if it carries the process-group metadata.
 
 - **Matching.** A collective's instances across ranks (a cohort) share
-  (group, step, sequence number). Without sequence numbers, the k-th kernel
-  on each rank forms cohort k. A cohort is complete when it has exactly one
-  kernel per rank of the group; only complete cohorts are used below.
+  (group, step, collective, sequence number). Calls without a sequence
+  number, and p2p send/recv (c10d gives every one sequence 0), join no
+  cohort: only their position would pair them across ranks, and one call
+  missing from a capture would mispair every later one. They stay on the
+  timeline. A cohort is complete when it has exactly one kernel per rank of
+  the group; only complete cohorts are used below.
 - **Imbalance table.** Per cohort: spread = last rank's start minus first
   rank's start, also as a percentage of the first rank's kernel duration.
   Bandwidth is the payload over the fastest member's duration. Sorted by
@@ -103,8 +106,10 @@ appears in a group's timeline only if it carries the process-group metadata.
 - **GPU/CPU utilization.** Per rank, over its GPU window: union of all GPU
   kernel and memcpy time, union of compute kernel time, and CPU time in ops
   and CUDA calls.
-- **GPU performance timelines.** GPU counter samples (SM activity, DRAM and
-  NVLink bandwidth) when the trace has them.
+- **GPU counter stats.** Per rank and counter (SM activity, DRAM and NVLink
+  bandwidth, ...): min, p10, p50, mean, p90, p99, max and std over the
+  capture, when the trace has counters. The samples themselves are not kept:
+  at fleet scale they would outweigh every other table.
 
 ## Outputs
 
@@ -114,7 +119,7 @@ appears in a group's timeline only if it carries the process-group metadata.
     results/pipeline_a/
       breakdown.parquet          Breakdown tab, one row per rank
       per_pg/<axis>_<pg>.dpg     one group's comm kernels, all ranks
-      per_pg/diagnostics_0.dpg   utilization and GPU counters
+      per_pg/diagnostics_0.dpg   utilization, unannotated comm kernels, GPU counter stats
     pg_map.json                  axis -> group -> ranks
     rank_map.json                analyzed rank -> trace file and host
     metadata.json                capture info and run environment
@@ -123,21 +128,21 @@ appears in a group's timeline only if it carries the process-group metadata.
   report/<stem>.html             the page; <stem> starts with comms_viz_<run-id>
   report/<stem>.pgdata           the per-group tables, fetched by the page on demand
   structured_report/<stem>/
-    README.md                    summary: worst collectives and last arrivals per group
-    breakdown.csv
-    groups/<group>.csv           every comm kernel in the group
-    imbalance.csv                worst-spread cohorts
-    arrivals.csv                 arrival positions per rank and collective
-    utilization.csv
-    comm_by_group.csv            per-rank time in each group's collectives
-    pm_summary.csv, pm_timeline.csv   GPU counters, when present
+    README.md                    the summary, for people and LLM agents
+    summary.json                 the same content as JSON
 ```
 
 To re-render the reports for the same run without re-running analysis,
 run comms_viz without `--trace-root`, the reports will be built only from `tree/`.
 
-comms_viz also optionally emits a structured artifact when `--structured-report` is given,
-in a format more readable for LLM analysis.
+The structured report summarizes the run without growing with world size:
+every list is a top-K or a distribution. It covers data quality (kernels
+without process-group metadata, calls left out of matching), utilization
+across ranks, stragglers (how often each rank starts a matched collective
+last, against chance, over all its groups), ranks in slow groups (median
+bus bandwidth well under the axis median), per-rank outliers by robust
+z-score with hosts where most ranks are outliers, and per axis the start
+spread and bandwidth distributions with the worst groups and collectives.
 
 ## CUDA graphs
 
@@ -145,6 +150,11 @@ Kernels replayed from a CUDA graph have no CPU op behind them, so they
 come without the c10d tags. PyTorch can annotate them at capture time
 (`enable_annotations=True`), and comms_viz copies those annotations onto the
 replayed kernels, matching them by `graph node id`.
+
+NCCL kernels that end up without process-group metadata, e.g. because
+annotations did not resolve, count as communication time but are on no
+group; comms_viz warns with the affected ranks (stderr, page banner,
+structured report).
 
 `--write-repaired-traces` also writes each rank's "repaired" trace to
 `tree/<run-id>/traces/`, after annotating kernel metadata, dropping stray

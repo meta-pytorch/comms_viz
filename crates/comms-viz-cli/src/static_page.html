@@ -148,19 +148,11 @@ input[type=text], select { border: 1px solid var(--border); background: var(--su
 .chartwrap { position: relative; }
 .chartwrap canvas { width: 100%; display: block; border: 1px solid var(--grid);
   border-radius: 6px; background: var(--surface-1); }
-.pm-rank-panel { position: relative; margin-top: 12px; border: 1px solid var(--border);
-  border-radius: 8px; overflow: hidden; background: var(--surface-1); }
-.pm-rank-title { margin: 0; padding: 9px 12px; border-bottom: 1px solid var(--border);
-  background: var(--page); color: var(--ink-1); font-size: 13px; }
-.pm-rank-panel canvas { width: 100%; display: block; }
 .chartnote { position: absolute; top: 10px; right: 14px; z-index: 4; pointer-events: none;
   background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px;
   padding: 3px 10px; font-size: 12px; color: var(--ink-2); opacity: .92; max-width: 60%; }
 .tcursor { position: absolute; z-index: 3; pointer-events: none; display: none;
   width: 1px; background: var(--ink-2); opacity: .7; }
-.pmval { position: absolute; z-index: 4; pointer-events: none; display: none;
-  font: 600 11px ui-monospace, monospace; padding: 0 3px; border-radius: 3px;
-  background: var(--surface-1); opacity: .92; white-space: nowrap; }
 .zoomband { position: absolute; z-index: 3; pointer-events: none; display: none;
   background: rgba(42,120,214,.14);
   border-left: 1px solid var(--s1); border-right: 1px solid var(--s1); }
@@ -258,6 +250,7 @@ details.node > summary { cursor: pointer; font-size: 12px; padding: 1px 0; }
 </div>
 <div class="layout">
   <main>
+    <div id="run-warnings"></div>
     <nav class="tabs" id="tabs"></nav>
     <section class="tab" id="tab-breakdown">
       <div class="card">
@@ -322,12 +315,11 @@ details.node > summary { cursor: pointer; font-size: 12px; padding: 1px 0; }
           <div id="pl-activity-table"></div>
         </div>
         <h3 id="pl-pm-control" style="display:none"><label>
-          <input type="checkbox" id="pl-pm-toggle"> Show GPU Performance Timelines</label></h3>
+          <input type="checkbox" id="pl-pm-toggle"> Show GPU Counter Stats</label></h3>
         <div id="pl-pm" style="display:none">
-          <div class="note">One panel per rank, with a separate held-value track for each selected metric. Matching metrics share the same vertical scale across ranks. Panels share the main timeline's time axis: zoom or pan in either one. Values are the raw counter samples from the trace, as Perfetto shows them.</div>
+          <div class="note">Per-rank statistics of each GPU counter over the capture, from every sample in the trace.</div>
           <div class="cats" id="pl-pm-metrics"></div>
-          <div id="pl-pm-panels"></div>
-          <div class="note" id="pl-pm-note"></div>
+          <div id="pl-pm-table"></div>
         </div>
       </div>
     </section>
@@ -633,6 +625,7 @@ function tableFromMember(raw) {
   const { head, rows } = parseCsv(new TextDecoder().decode(raw));
   return { names: head, get: (c, r) => rows[r][c], nrows: rows.length };
 }
+// <events-from-table>
 // Shared timeline-event builder: `get(colIdx, row)` reads a cell (string
 // from CSV, string-or-number from DPG1 — coercions below make both paths
 // produce identical events).
@@ -669,11 +662,14 @@ function eventsFromTable(names, get, nrows) {
   }
   return evs;
 }
+// </events-from-table>
 // --- run/status ------------------------------------------------------------
 const STATUS = { 0: ["Queued", "warn"], 1: ["Running", "blue"], 2: ["Analyzing", "blue"],
   3: ["Aggregating", "blue"], 4: ["Completed", "good"], 5: ["Failed", "crit"] };
 const run = RAW.run || {}, cfg = RAW.config || {}, status = RAW.status || {};
 const md = RAW.metadata, mdConfig = md ? (md.config || {}) : {};
+document.getElementById("run-warnings").replaceChildren(
+  ...(RAW.warnings || []).map((w) => el("div", { class: "warnbox" }, "Warning: " + w)));
 const totalGpus = (md && (md.world_size ?? mdConfig.world_size)) ?? run.total_ranks ?? 0;
 const jobName = run.run_name || mdConfig.run_name || "";
 // The analyzed training step, inferred from the trace path when present.
@@ -754,6 +750,103 @@ const STEM_LABEL = new Map(), LABEL_STEM = new Map();
 const STEMS = new Set(GROUPS.map((g) => g.stem));
 // Sidecar member with rank activity and PM samples; not a process group.
 const DIAG_STEM = "diagnostics_0";
+// <cohort-logic> Pure matching functions; tests/integration/semantics.rs runs
+// them under node against the structured report's Rust port.
+// c10d p2p calls, whose sequence number is 0 on every send and recv.
+const isP2p = (e) => ["send", "recv"].includes(e.operation) || ["send", "recv"].includes(e.collective);
+// Peer cohorts, shared so the imbalance table, straggler stats and hover
+// tooltip can never disagree about who the straggler is. Each rank's events
+// are first grouped into one instance per collective call (instancesOf()), so
+// a call that launches several kernels or copies counts once. Instances
+// match on (physical PG, step, collective, c10d sequence), and occurrence is
+// counted within that key on every rank, since CUDA-graph replays repeat a
+// captured sequence. Calls without a sequence, and p2p calls (c10d gives
+// every send/recv sequence 0), join no cohort: only their position would
+// pair them across ranks, and one call missing from the capture would
+// silently mispair every later one. They stay on the timeline. Built once
+// per group (build() invalidates) and stamped onto the events as
+// `cohortKey`, so hover stays O(1) instead of re-bucketing per pixel.
+function cohortsOf(events) {
+  const perRank = new Map();
+  for (const e of events) {
+    e.cohortKey = null; e.instance = null;
+    if (e.flash) continue;
+    if (!perRank.has(e.rank)) perRank.set(e.rank, []);
+    perRank.get(e.rank).push(e);
+  }
+  const byKey = new Map(), list = [];
+  // Rank insertion order decides ties, matching the pre-cohort table.
+  for (const evs of perRank.values()) {
+    evs.sort((a, b) => a.ts - b.ts);
+    const occurrences = new Map();
+    instancesOf(evs).forEach((inst) => {
+      if (inst.sequence == null || isP2p(inst)) return;
+      const base = `${inst.pg}\u0000${inst.step ?? "?"}\u0000${inst.collective}\u0000${inst.sequence}`;
+      const occurrence = occurrences.get(base) || 0;
+      occurrences.set(base, occurrence + 1);
+      const key = `${base}\u0000${occurrence}`;
+      let c = byKey.get(key);
+      if (!c) {
+        const seq = Number(inst.sequence);
+        c = { seq: Number.isFinite(seq) ? seq : inst.sequence, step: inst.step, n: 0, ear: inst, lat: inst,
+          quick: inst, slow: inst, matched: true, members: [] };
+        byKey.set(key, c); list.push(c);
+      } else if (c.ear.matchName !== inst.matchName) {
+        c.matched = false;
+      }
+      if (c.step !== inst.step) c.step = null;
+      c.n++; c.members.push(inst);
+      for (const ev of inst.events) ev.cohortKey = key;
+      if (inst.ts < c.ear.ts) c.ear = inst;
+      if (inst.ts > c.lat.ts) c.lat = inst;
+      if (inst.dur < c.quick.dur) c.quick = inst;
+      if (inst.dur > c.slow.dur) c.slow = inst;
+    });
+  }
+  return { list, byKey, unmatched: events.filter((e) => !e.flash && e.cohortKey == null).length };
+}
+// One rank's events (sorted by start) as one instance per collective call.
+// Events a call tags with the same collective metadata, e.g. a copy-engine
+// all-gather's several copies, join one instance when they share PG, step,
+// collective, sequence, p2p direction and peer, and graph replay, and are
+// consecutive among that PG's events, since graph replays repeat
+// sequences. Events without a sequence are never grouped. An instance with
+// a communication kernel spans its kernels, so local work the call also
+// tags, like copy-in/out, can't stretch it; one made only of copies (a
+// copy-engine collective) spans all of them.
+function instancesOf(evs) {
+  const groups = [], open = new Map(); // pg -> [key, events] of its last group
+  for (const ev of evs) {
+    const peer = ev.operation === "send" ? ev.dst : ev.operation === "recv" ? ev.src : "";
+    const key = ev.sequence == null ? null : [ev.step ?? "?", ev.collective, ev.sequence,
+      ev.operation ?? "", peer ?? "", ev.replay ?? ""].join("\u0000");
+    const last = open.get(ev.pg);
+    if (key != null && last && last[0] === key) { last[1].push(ev); continue; }
+    const group = [ev];
+    groups.push(group);
+    open.set(ev.pg, [key, group]);
+  }
+  return groups.map((events) => {
+    const kernels = events.filter((e) => e.commKernel);
+    const timed = kernels.length ? kernels : events;
+    let ts = Infinity, end = -Infinity;
+    for (const e of timed) { ts = Math.min(ts, e.ts); end = Math.max(end, e.ts + e.dur); }
+    const inst = { ...events[0], ts, dur: end - ts, events,
+      matchName: events[0].collective || events[0].originalName };
+    for (const e of events) e.instance = inst;
+    return inst;
+  });
+}
+function cohortComplete(c) {
+  if (!c || c.n < 2 || !c.matched) return false;
+  const expected = c.members.find((e) => e.groupSize > 0)?.groupSize;
+  if (expected == null) return true;
+  return c.n === expected
+    && new Set(c.members.map((e) => e.rank)).size === expected
+    && c.members.every((e) => e.groupSize < 0 || e.groupSize === expected);
+}
+// </cohort-logic>
+const PM_STATS = ["n", "min", "p10", "p50", "mean", "p90", "p99", "max", "std"];
 {
   for (const [s] of RAW.per_pg || []) STEMS.add(s);
   const keyByAlias = new Map();
@@ -1017,7 +1110,7 @@ function attachZoom(cv, getDomain, setDomain, px2x, min) {
   // Rubber band over the drag region; appears only past the 8px threshold,
   // so a plain click never flashes it. Positioned in the chartwrap's content
   // coordinates (the parallelism canvas is sticky inside a scrolled wrap).
-  const wrap = cv.closest(".chartwrap, .pm-rank-panel");
+  const wrap = cv.closest(".chartwrap");
   const band = el("div", { class: "zoomband" });
   wrap.append(band);
   let drag = null;
@@ -1572,7 +1665,7 @@ function typeahead(input, list, options, current, onPick) {
 const pl = {
   cache: new Map(), stem: null, events: null, minT: 0, maxT: 0, domain: null,
   nameSlot: new Map(), rows: [], imbSort: { col: "diff", dir: -1 }, imbPage: 0,
-  diagnostics: null, pmSelected: new Set(), _pmDomain: null, _cohorts: null, _hoverKey: null,
+  diagnostics: null, pmMetric: null, _cohorts: null, _hoverKey: null,
   // ML/SW are recomputed per group in build() from the widest rank and
   // stream labels; SW is the small per-lane stream column beside the plot.
   ML: 96, SW: 24, MR: 12, MB: 44,
@@ -1596,9 +1689,7 @@ const pl = {
     });
     document.getElementById("pl-straggler-toggle").addEventListener("change", () => this.renderStragglers());
     document.getElementById("pl-activity-toggle").addEventListener("change", () => this.renderActivity());
-    document.getElementById("pl-pm-toggle").addEventListener("change", () => {
-      this._pmDomain = null; this.renderPm();
-    });
+    document.getElementById("pl-pm-toggle").addEventListener("change", () => this.renderPm());
     const cv = document.getElementById("pl-canvas");
     const set = (a, b) => { this.domain = a == null ? null : [Math.max(a, 0), b]; this.draw(); };
     attachZoom(cv, () => this.dom(), set, (px) => { const [x0, x1] = this.dom();
@@ -1686,26 +1777,25 @@ const pl = {
       const col = Object.fromEntries(names.map((h, i) => [h, i]));
       const activity = [], pm = [];
       for (let r = 0; r < nrows; r++) {
-        const row = { rank: +get(col.rank, r), kind: String(get(col.kind, r)),
-          metric: String(get(col.metric, r)), ts: +get(col.ts, r), value: +get(col.value, r),
-          gpu: +get(col.gpu_busy, r), compute: +get(col.compute, r),
-          cpu: +get(col.cpu_active, r), window: +get(col.window, r) };
-        (row.kind === "pm" ? pm : activity).push(row);
+        const rank = +get(col.rank, r);
+        if (String(get(col.kind, r)) === "pm") {
+          const row = { rank, metric: String(get(col.metric, r)) };
+          for (const k of PM_STATS) row[k] = +get(col[k], r);
+          pm.push(row);
+        } else {
+          activity.push({ rank, gpu: +get(col.gpu_busy, r), compute: +get(col.compute, r),
+            cpu: +get(col.cpu_active, r), window: +get(col.window, r) });
+        }
       }
       this.diagnostics = { activity, pm };
       const metrics = [...new Set(pm.map((r) => r.metric))].sort();
-      const preferred = ["SM Active (%)", "DRAM BW (%)", "NVLink RX", "NVLink TX"];
-      this.pmSelected = new Set(preferred.filter((metric) => metrics.includes(metric)));
-      if (!this.pmSelected.size) this.pmSelected = new Set(metrics.slice(0, 4));
+      this.pmMetric = ["SM Active (%)", ...metrics].find((m) => metrics.includes(m)) ?? null;
       const box = document.getElementById("pl-pm-metrics");
       box.textContent = "";
       for (const metric of metrics) {
-        const input = el("input", { type: "checkbox", ...(this.pmSelected.has(metric) ? { checked: "" } : {}) });
-        input.addEventListener("change", () => {
-          if (input.checked) this.pmSelected.add(metric); else this.pmSelected.delete(metric);
-          this._pmDomain = null;
-          this.renderPm();
-        });
+        const input = el("input", { type: "radio", name: "pl-pm-metric",
+          ...(metric === this.pmMetric ? { checked: "" } : {}) });
+        input.addEventListener("change", () => { this.pmMetric = metric; this.renderPm(); });
         box.append(el("label", { class: "it" }, input, " ", metric));
       }
       this.renderDiagnostics();
@@ -1741,7 +1831,6 @@ const pl = {
     const anyFlash = all.some((e) => e.flash);
     document.getElementById("pl-flash-wrap").style.display = anyFlash ? "" : "none";
     this.events = all.filter((e) => showFlash || !e.flash);
-    this._pmDomain = null;
     this._cohorts = null;
     this._hoverKey = null;
     this.minT = Infinity; this.maxT = -Infinity;
@@ -1883,7 +1972,6 @@ const pl = {
     }
     ctx.fillText("Time (μs)", ML + PW / 2, H - 6);
     this._view = { rowH, scroll, bodyH, x0, x1, span, PW };
-    this.renderPm();
     this.showCursor(this.cursorT);
   },
   setHoverKey(key) {
@@ -1941,7 +2029,7 @@ const pl = {
       const hot = (n, val) => el("div", { class: "r" }, el("span", { class: "n" }, n),
         el("span", { class: "v hot" }, val));
       tt.append(
-        el("div", { class: "sep" }, `Peers — ${c.bySeq ? `seq ${c.seq}` : `kernel #${c.seq}`} on ${loc(c.n)} ranks`),
+        el("div", { class: "sep" }, `Peers — seq ${c.seq} on ${loc(c.n)} ranks`),
         r("Start min:", `${loc(c.ear.ts - this.minT)} μs · ${rk(c.ear)}`),
         r("Start max:", `${loc(c.lat.ts - this.minT)} μs · ${rk(c.lat)}`),
         hot("Straggler:", `${rk(c.lat)} · +${loc(spread)} μs late`),
@@ -1967,98 +2055,12 @@ const pl = {
     tt.style.display = "block";
     placeTip(tt, e);
   },
-  // Peer cohorts, shared so the imbalance table, straggler stats and hover
-  // tooltip can never disagree about who the straggler is. Each rank's events
-  // are first grouped into one instance per collective call (instances()), so
-  // a call that launches several kernels or copies counts once. Instances
-  // match on (physical PG, step, collective, c10d sequence), and occurrence is
-  // counted within that key on every rank. Without sequence metadata the k-th
-  // event of every rank forms cohort k. Built once per group (build()
-  // invalidates) and stamped onto the events as `cohortKey`, so hover stays
-  // O(1) instead of re-bucketing per pixel.
+  // See cohortsOf. Built once per group (build() invalidates).
   cohorts() {
-    if (this._cohorts) return this._cohorts;
-    const perRank = new Map();
-    for (const e of this.events) {
-      e.cohortKey = null; e.instance = null;
-      if (e.flash) continue;
-      if (!perRank.has(e.rank)) perRank.set(e.rank, []);
-      perRank.get(e.rank).push(e);
-    }
-    const byKey = new Map(), list = [];
-    const bySeq = this.events.some((e) => !e.flash && e.sequence != null);
-    // Rank insertion order decides ties, matching the pre-cohort table.
-    for (const evs of perRank.values()) {
-      evs.sort((a, b) => a.ts - b.ts);
-      const occurrences = new Map();
-      this.instances(evs, bySeq).forEach((inst, k) => {
-        // p2p ops share one cohort per sequence so a send meets its recv.
-        const kind = inst.operation ? "p2p" : inst.collective;
-        const base = bySeq ? `${inst.pg}\u0000${inst.step ?? "?"}\u0000${kind}\u0000${inst.sequence}` : `ordinal\u0000${k}`;
-        const occurrence = occurrences.get(base) || 0;
-        occurrences.set(base, occurrence + 1);
-        const key = `${base}\u0000${occurrence}`;
-        let c = byKey.get(key);
-        if (!c) {
-          const seq = bySeq ? Number(inst.sequence) : k;
-          c = { seq: Number.isFinite(seq) ? seq : inst.sequence, bySeq, step: inst.step, n: 0, ear: inst, lat: inst,
-            quick: inst, slow: inst, matched: true, members: [] };
-          byKey.set(key, c); list.push(c);
-        } else if (c.ear.matchName !== inst.matchName) {
-          c.matched = false;
-        }
-        if (c.step !== inst.step) c.step = null;
-        c.n++; c.members.push(inst);
-        for (const ev of inst.events) ev.cohortKey = key;
-        if (inst.ts < c.ear.ts) c.ear = inst;
-        if (inst.ts > c.lat.ts) c.lat = inst;
-        if (inst.dur < c.quick.dur) c.quick = inst;
-        if (inst.dur > c.slow.dur) c.slow = inst;
-      });
-    }
-    this._cohorts = { list, byKey, bySeq };
-    return this._cohorts;
-  },
-  // One rank's events (sorted by start) as one instance per collective call.
-  // Events a call tags with the same collective metadata, e.g. a copy-engine
-  // all-gather's several copies, join one instance when they share PG, step,
-  // collective, sequence, p2p direction and peer, and graph replay, and are
-  // consecutive among that PG's events, since graph replays repeat
-  // sequences. Events without a sequence are never grouped. An instance with
-  // a communication kernel spans its kernels, so local work the call also
-  // tags, like copy-in/out, can't stretch it; one made only of copies (a
-  // copy-engine collective) spans all of them.
-  instances(evs, bySeq) {
-    const groups = [], open = new Map(); // pg -> [key, events] of its last group
-    for (const ev of evs) {
-      if (bySeq && ev.sequence == null) continue;
-      const peer = ev.operation === "send" ? ev.dst : ev.operation === "recv" ? ev.src : "";
-      const key = ev.sequence == null ? null : [ev.step ?? "?", ev.collective, ev.sequence,
-        ev.operation ?? "", peer ?? "", ev.replay ?? ""].join("\u0000");
-      const last = open.get(ev.pg);
-      if (key != null && last && last[0] === key) { last[1].push(ev); continue; }
-      const group = [ev];
-      groups.push(group);
-      open.set(ev.pg, [key, group]);
-    }
-    return groups.map((events) => {
-      const kernels = events.filter((e) => e.commKernel);
-      const timed = kernels.length ? kernels : events;
-      let ts = Infinity, end = -Infinity;
-      for (const e of timed) { ts = Math.min(ts, e.ts); end = Math.max(end, e.ts + e.dur); }
-      const inst = { ...events[0], ts, dur: end - ts, events,
-        matchName: events[0].collective || events[0].originalName };
-      for (const e of events) e.instance = inst;
-      return inst;
-    });
+    return this._cohorts ??= cohortsOf(this.events);
   },
   cohortComplete(c) {
-    if (!c || c.n < 2 || !c.matched) return false;
-    const expected = c.members.find((e) => e.groupSize > 0)?.groupSize;
-    if (expected == null) return true;
-    return c.n === expected
-      && new Set(c.members.map((e) => e.rank)).size === expected
-      && c.members.every((e) => e.groupSize < 0 || e.groupSize === expected);
+    return cohortComplete(c);
   },
   // Bytes per rank from c10d's in/out element counts; 0 when unknown.
   payload(members) {
@@ -2191,131 +2193,30 @@ const pl = {
     const control = document.getElementById("pl-pm-control"), wrap = document.getElementById("pl-pm");
     if (!this.events || !this.diagnostics) return;
     const ranks = this.rankSet();
-    const samples = this.diagnostics.pm.filter((s) => ranks.has(s.rank));
-    control.style.display = samples.length ? "" : "none";
-    wrap.style.display = samples.length && document.getElementById("pl-pm-toggle").checked ? "" : "none";
+    const rows = this.diagnostics.pm.filter((r) => ranks.has(r.rank) && r.metric === this.pmMetric)
+      .sort((a, b) => a.rank - b.rank);
+    control.style.display = this.diagnostics.pm.length ? "" : "none";
+    wrap.style.display = this.diagnostics.pm.length && document.getElementById("pl-pm-toggle").checked ? "" : "none";
     if (wrap.style.display === "none") return;
-    const panels = document.getElementById("pl-pm-panels");
-    const note = document.getElementById("pl-pm-note");
-    const metrics = [...this.pmSelected];
-    if (!metrics.length) {
-      panels.textContent = ""; this._pmRankKey = null;
-      note.textContent = "Select at least one metric.";
-      return;
-    }
-    note.textContent = "";
-    const [x0, x1] = this.dom(), lo = this.minT + x0, hi = this.minT + x1;
-    const domainKey = `${lo}:${hi}:${metrics.join("\u0000")}:${this.stem}:${panels.clientWidth}:${this.ML}:${this.MR}`;
-    if (this._pmDomain === domainKey) return;
-    this._pmDomain = domainKey;
-    const rankList = [...ranks].sort((a, b) => a - b);
-    const pointsByRankMetric = new Map(), scales = new Map();
-    const key = (rank, metric) => `${rank}\u0000${metric}`;
-    const samplesByKey = new Map();
-    for (const s of samples) {
-      const k = key(s.rank, s.metric);
-      if (!samplesByKey.has(k)) samplesByKey.set(k, []);
-      samplesByKey.get(k).push(s);
-    }
-    for (const metric of metrics) {
-      const visible = [];
-      for (const rank of rankList) {
-        const all = (samplesByKey.get(key(rank, metric)) || []).sort((a, b) => a.ts - b.ts);
-        const points = all.filter((s) => s.ts >= lo && s.ts <= hi);
-        const prior = all.filter((s) => s.ts < lo).pop();
-        if (prior) points.unshift({ ...prior, ts: lo });
-        pointsByRankMetric.set(key(rank, metric), points);
-        visible.push(...points);
-      }
-      let vmin = visible.reduce((v, s) => Math.min(v, s.value), Infinity);
-      let vmax = visible.reduce((v, s) => Math.max(v, s.value), -Infinity);
-      if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
-      if (metric.includes("%") || metric.includes("pct_of_peak")) { vmin = 0; vmax = 100; }
-      else if (vmin >= 0) { vmin = 0; vmax = Math.max(vmax, 1); }
-      else if (vmax <= vmin) { const pad = Math.max(Math.abs(vmin) * .05, 1); vmin -= pad; vmax += pad; }
-      scales.set(metric, { vmin, vmax });
-    }
-    const trackH = 72, MB = 34;
-    const span = Math.max(x1 - x0, 1e-9);
-    const rankKey = `${rankList.join(",")}:${metrics.length}`;
-    if (this._pmRankKey !== rankKey) {
-      this._pmRankKey = rankKey;
-      panels.textContent = "";
-      this.pmCanvases = rankList.map((rank) => {
-        const cv = el("canvas");
-        panels.append(el("div", { class: "pm-rank-panel" },
-          el("h4", { class: "pm-rank-title" }, `Rank ${rank}`), cv));
-        const px2x = (px) => { const [a, b] = this.dom(); return a + (px - this.pmML) / this.pmPW * (b - a); };
-        attachZoom(cv, () => this.dom(), this.setDomain, px2x, 0);
-        cv.addEventListener("mousemove", (e) =>
-          this.showCursor(e.offsetX < this.pmML ? null : px2x(e.offsetX)));
-        cv.addEventListener("mouseleave", () => this.showCursor(null));
-        return cv;
-      });
-    }
-    // Same time-to-x mapping as the main timeline, so both line up on screen.
-    const g = this.plotGeom();
-    const ML = g.width > 0 ? g.left - this.pmCanvases[0].getBoundingClientRect().left : 210;
-    const PW = g.width > 0 ? g.width : panels.clientWidth - ML - 12;
-    this.pmML = ML; this.pmPW = PW;
-    this.pmTracks = rankList.map(() => []);
-    rankList.forEach((rank, ri) => {
-      const cv = this.pmCanvases[ri];
-      const H = metrics.length * trackH + MB;
-      const { ctx, W } = setupCanvas(cv, H);
-      ctx.clearRect(0, 0, W, H);
-      metrics.forEach((metric, mi) => {
-        const y0 = mi * trackH, top = y0 + 18, bottom = y0 + trackH - 14;
-        const { vmin, vmax } = scales.get(metric);
-        if (mi % 2) { ctx.fillStyle = css("--zebra"); ctx.fillRect(0, y0, W, trackH); }
-        ctx.fillStyle = css("--ink-2"); ctx.font = "11px system-ui"; ctx.textAlign = "left";
-        ctx.fillText(metric, ML + 4, y0 + 12);
-        ctx.textAlign = "right";
-        ctx.font = "9px ui-monospace, monospace"; ctx.fillStyle = css("--ink-3");
-        ctx.fillText(fmtCounter(vmax), ML - 6, top + 3); ctx.fillText(fmtCounter(vmin), ML - 6, bottom);
-        ctx.strokeStyle = css("--grid"); ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(ML, bottom); ctx.lineTo(ML + PW, bottom); ctx.stroke();
-        const points = pointsByRankMetric.get(key(rank, metric));
-        const color = css(SLOTS[mi % SLOTS.length]);
-        this.pmTracks[ri].push({ points, top, bottom, vmin, vmax, color });
-        if (!points.length) return;
-        ctx.fillStyle = color; ctx.strokeStyle = color; ctx.lineWidth = 1;
-        ctx.globalAlpha = .18;
-        points.forEach((s, i) => {
-          const x0p = ML + (Math.max(s.ts, lo) - lo) / span * PW;
-          const nextTs = i + 1 < points.length ? points[i + 1].ts : hi;
-          const x1p = ML + (Math.min(nextTs, hi) - lo) / span * PW;
-          const y = bottom - (s.value - vmin) / (vmax - vmin) * (bottom - top);
-          ctx.fillRect(x0p, y, Math.max(x1p - x0p, 1), bottom - y);
-        });
-        ctx.globalAlpha = .9; ctx.beginPath(); let previousY = null;
-        points.forEach((s, i) => {
-          const x = ML + (s.ts - lo) / span * PW;
-          const y = bottom - (s.value - vmin) / (vmax - vmin) * (bottom - top);
-          if (i) { ctx.lineTo(x, previousY); ctx.lineTo(x, y); } else ctx.moveTo(x, y);
-          previousY = y;
-        });
-        ctx.lineTo(ML + PW, previousY);
-        ctx.stroke(); ctx.globalAlpha = 1;
-      });
-      ctx.fillStyle = css("--ink-3"); ctx.textAlign = "center"; ctx.font = "11px system-ui";
-      for (const v of niceTicks(span, 8)) {
-        const x = ML + v / span * PW;
-        ctx.fillText(loc(x0 + v), x, H - 18);
-      }
-      ctx.fillText("Time (μs)", ML + PW / 2, H - 3);
-    });
+    const stats = PM_STATS.filter((k) => k !== "n");
+    const head = el("tr", {}, el("th", {}, "Rank"), el("th", {}, "Samples"),
+      ...stats.map((k) => el("th", {}, k)));
+    const body = rows.map((r) => el("tr", {}, el("td", {}, String(r.rank)), el("td", {}, loc(r.n)),
+      ...stats.map((k) => el("td", {}, fmtCounter(r[k])))));
+    document.getElementById("pl-pm-table").replaceChildren(rows.length
+      ? el("div", { style: "overflow-x:auto" }, el("table", { class: "data" }, head, body))
+      : el("p", { class: "note" }, "No samples of this counter on the selected group's ranks."));
   },
   plotGeom() {
     const cv = document.getElementById("pl-canvas"), r = cv.getBoundingClientRect();
     return { left: r.left + cv.clientLeft + this.ML, width: cv.clientWidth - this.ML - this.MR };
   },
-  // One vertical line at time t (domain-relative) on the main timeline and every PM panel.
+  // One vertical line at time t (domain-relative) on the main timeline.
   showCursor(t) {
     this.cursorT = t;
     const [x0, x1] = this.dom(), g = this.plotGeom();
     const place = (cv) => {
-      const wrap = cv.parentElement.closest(".chartwrap, .pm-rank-panel");
+      const wrap = cv.parentElement.closest(".chartwrap");
       const line = wrap.querySelector(":scope > .tcursor") || wrap.appendChild(el("div", { class: "tcursor" }));
       const x = g.left + (t - x0) / (x1 - x0) * g.width;
       if (t == null || x < g.left || x > g.left + g.width) { line.style.display = "none"; return; }
@@ -2326,47 +2227,15 @@ const pl = {
       line.style.display = "block";
     };
     place(document.getElementById("pl-canvas"));
-    if (document.getElementById("pl-pm").style.display !== "none")
-      (this.pmCanvases || []).forEach((cv, ri) => {
-        if (!cv.isConnected) return;
-        place(cv);
-        this.placePmValues(cv, this.pmTracks?.[ri] || [], t);
-      });
-  },
-  // Each metric's value at the cursor, next to its line on one rank's panel.
-  placePmValues(cv, tracks, t) {
-    const wrap = cv.parentElement;
-    const labels = [...wrap.querySelectorAll(":scope > .pmval")];
-    while (labels.length < tracks.length) labels.push(wrap.appendChild(el("div", { class: "pmval" })));
-    const [x0, x1] = this.dom(), g = this.plotGeom();
-    const x = g.left + (t - x0) / (x1 - x0) * g.width;
-    const inPlot = t != null && x >= g.left && x <= g.left + g.width;
-    const r = cv.getBoundingClientRect(), w = wrap.getBoundingClientRect();
-    const ts = this.minT + t;
-    labels.forEach((label, i) => {
-      const tr = tracks[i];
-      // Last sample at or before the cursor: the step the line is drawing there.
-      let lo = 0, hi = tr && inPlot ? tr.points.length : 0;
-      while (lo < hi) { const mid = (lo + hi) >> 1; if (tr.points[mid].ts <= ts) lo = mid + 1; else hi = mid; }
-      const s = lo > 0 ? tr.points[lo - 1] : null;
-      if (!s) { label.style.display = "none"; return; }
-      const v = s.value;
-      label.textContent = fmtCounter(v);
-      label.style.color = tr.color;
-      label.style.display = "block";
-      const y = tr.bottom - (v - tr.vmin) / (tr.vmax - tr.vmin) * (tr.bottom - tr.top);
-      const left = x - w.left - wrap.clientLeft + 6;
-      label.style.left = (left + label.offsetWidth > wrap.clientWidth ? left - 12 - label.offsetWidth : left) + "px";
-      label.style.top = r.top - w.top - wrap.clientTop + Math.max(tr.top, Math.min(y, tr.bottom)) - 7 + "px";
-    });
   },
   renderImbalance() {
     const box = document.getElementById("pl-imb");
     box.textContent = "";
     box.append(el("p", { class: "note" },
-      (this.cohorts().bySeq
-        ? "Kernels are matched by physical process group, step, c10d sequence, and occurrence. "
-        : "Sequence metadata is unavailable; kernels are matched by ordinal position on each rank. ") +
+      "Kernels are matched by physical process group, step, c10d sequence, and occurrence. " +
+      (this.cohorts().unmatched
+        ? `${loc(this.cohorts().unmatched)} kernels without a sequence number, or p2p, are left out. `
+        : "") +
       "For each group: the earliest and latest starting rank, and the start " +
       "spread as a percentage of the earliest kernel's duration."));
     const rows = this.imbalance();

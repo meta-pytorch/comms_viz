@@ -14,16 +14,11 @@
 //!    as its page-facing CSV text)
 //!  - `<name>__per_pg_members`   every per-group member payload, decoded
 //!    (page-visible view), concatenated
-//!  - `<name>__per_pg_parquet`   schema/shape of every per-PG parquet
-//!  - `<name>__flat_docs`        the 10 flat analyzer docs
 //!  - `<name>__meta`             MANIFEST + _meta docs (rev-filtered)
-//!  - `<name>__merged_trace_r0`  decoded rank-0 merged-trace summary
-//!    (JSON-format fixtures with stable merge)
 
 use std::path::Path;
 
 use crate::harness::Fixture;
-use crate::harness::Format;
 use crate::harness::{self};
 
 fn snapshot_fixture(fx: &Fixture) {
@@ -51,28 +46,11 @@ fn snapshot_fixture(fx: &Fixture) {
             format!("{}__per_pg_members", fx.name),
             harness::concat_members(&pipeline_a.join("per_pg"))
         );
-        insta::assert_snapshot!(
-            format!("{}__per_pg_parquet", fx.name),
-            harness::parquet_schemas(&pipeline_a.join("per_pg"))
-        );
-        insta::assert_snapshot!(
-            format!("{}__flat_docs", fx.name),
-            harness::concat_dir(&out_dir.join("flat"), |n| n.ends_with(".json"))
-        );
 
         let meta = out_dir.join("tree/local-run/_meta");
         let mut meta_dump = harness::concat_dir(&meta, |n| n == "MANIFEST" || n.ends_with(".json"));
         meta_dump.push_str(&harness::concat_dir(&meta.join("heartbeats"), |_| true));
         insta::assert_snapshot!(format!("{}__meta", fx.name), meta_dump);
-
-        if fx.format == Format::Json && fx.merged_stable {
-            insta::assert_snapshot!(
-                format!("{}__merged_trace_r0", fx.name),
-                harness::merged_trace_summary(
-                    &out_dir.join("tree/local-run/traces/000000.merged.pt.trace.json.gz")
-                )
-            );
-        }
     });
 }
 

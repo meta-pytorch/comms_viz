@@ -20,6 +20,7 @@ use comms_viz_core::trace::{self};
 use tikv_jemallocator::Jemalloc;
 
 mod convert_pftrace;
+mod diagnostics;
 mod discovery;
 mod publish;
 mod static_page;

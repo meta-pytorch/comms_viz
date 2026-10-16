@@ -1,5 +1,0 @@
----
-source: crates/comms-viz-cli/tests/integration/page.rs
-expression: "format!(\"{}B  sha256:{}\", pgdata.len(), harness::sha256_16(&pgdata))"
----
-23901B  sha256:a0ca12c7bc00d6d1

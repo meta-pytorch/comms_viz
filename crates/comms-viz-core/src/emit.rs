@@ -72,8 +72,8 @@ pub struct RunMeta {
 
 impl RunMeta {
     /// The trace root the artifacts record as the source of truth
-    /// (metadata.json trace_folder_path, the flat 1009 doc,
-    /// _meta/config.json trace_root); file access always uses
+    /// (metadata.json trace_folder_path, _meta/config.json trace_root);
+    /// file access always uses
     /// `trace_root`.
     fn recorded_trace_root(&self) -> &str {
         self.source_trace_root
@@ -1242,76 +1242,6 @@ fn metadata_json(meta: &RunMeta, process_groups: &[ProcessGroupConfig]) -> Strin
     }))
 }
 
-// ---------------------------------------------------------------------------
-// Pipeline B analyzers (flat/*.json)
-// ---------------------------------------------------------------------------
-
-/// All 10 analyzer payloads, as (analyzer_id, json string).
-pub fn analyzer_payloads(
-    meta: &RunMeta,
-    trace_process_groups: &[ProcessGroupConfig],
-) -> Vec<(i64, String)> {
-    let world = meta.world_size;
-    let stub = |aid: i64, name: &str| -> String {
-        dumps(&json!({
-            "analyzer_id": aid,
-            "name": name,
-            "total_ranks": world,
-            "analysis_pending": true,
-        }))
-    };
-    let mut out = Vec::new();
-    out.push((1001, stub(1001, "LlmFailureAnalyzer")));
-    out.push((1002, stub(1002, "CollectHostMapAnalyzer")));
-    out.push((1003, stub(1003, "NCCLCommMemoryUsageAnalyzer")));
-    out.push((1004, stub(1004, "NCCLCommsInitAnalyzer")));
-    out.push((1005, stub(1005, "NCCLCommsLogAnalyzer")));
-    out.push((1007, stub(1007, "NCCLCommDumpAnalyzer")));
-    out.push((
-        1008,
-        dumps(&json!({
-            "analyzer_id": 1008,
-            "name": "LLMMemoryAnalyzer",
-            "total_ranks": world,
-            "peak_memory_bytes": null,
-            "fragmentation_pctg": null,
-            "oom_detected": false,
-            "analysis_pending": true,
-        })),
-    ));
-    out.push((
-        1009,
-        dumps(&json!({
-            "analyzer_id": 1009,
-            "name": "DumpTraceFolderAnalyzer",
-            "trace_folder_path": meta.recorded_trace_root(),
-            "is_folder_sharded": false,
-        })),
-    ));
-    let pg_axes: serde_json::Map<String, Value> = trace_pg_axes(trace_process_groups)
-        .into_iter()
-        .filter_map(|(axis, configs)| {
-            configs
-                .iter()
-                .map(|config| config.pg_size)
-                .max()
-                .map(|size| (axis, json!(size)))
-        })
-        .collect();
-    out.push((
-        1010,
-        dumps(&json!({
-            "analyzer_id": 1010,
-            "name": "LLMTopologyAnalyzer",
-            "world_size": world,
-            "pg_axes": pg_axes,
-            "host_map_pending": true,
-        })),
-    ));
-    out.push((1011, stub(1011, "LlmSlowRankAnalyzer")));
-    out
-}
-
 /// The run environment across ranks: per field, in display order, each
 /// distinct value with the ranks that recorded it (`"0-7,16"`).
 fn environment_json(environments: &BTreeMap<i64, TraceEnvironment>) -> Value {
@@ -1367,7 +1297,7 @@ fn rank_ranges(ranks: &[i64]) -> String {
     out.join(",")
 }
 
-/// Write metadata docs + analyzer flat JSONs for a completed run.
+/// Write the metadata docs for a completed run.
 /// (Per-worker heartbeats/failure docs are NOT written here — they are
 /// emitted at partial-write time, one per emulated worker.)
 pub fn emit_metadata(
@@ -1450,12 +1380,6 @@ pub fn emit_metadata(
         pg_map_json(trace_process_groups).as_bytes(),
     )?;
 
-    // flat analyzer JSONs: flat/{run}__{RESULT_DIR}__{aid:04d}.json
-    let flat_dir = out_root.join("flat");
-    for (aid, payload) in analyzer_payloads(meta, trace_process_groups) {
-        let key = format!("{}__{}__{:04}.json", meta.run_id, RESULT_DIR, aid);
-        write_file(&flat_dir.join(key), payload.as_bytes())?;
-    }
     Ok(())
 }
 
@@ -1613,16 +1537,6 @@ mod tests {
         assert_eq!(info["groups"]["cp"]["size"], 4);
         assert!(info.get("fsdp_alias").is_none(), "no FSDP axis is inferred");
 
-        let topology: Value = serde_json::from_str(
-            &analyzer_payloads(&meta(), &configs)
-                .into_iter()
-                .find(|(aid, _)| *aid == 1010)
-                .expect("topology analyzer is emitted")
-                .1,
-        )
-        .expect("topology analyzer is valid JSON");
-        assert_eq!(topology["pg_axes"], json!({"cp": 4, "tp": 2}));
-
         let tmp = tempfile::tempdir().unwrap();
         let counts = StatusCounts {
             ranks_processed: 4,
@@ -1725,23 +1639,15 @@ mod tests {
         }
     }
 
-    /// run.json and the flat analyzer docs; exact bytes pinned (sorted key
-    /// order).
+    /// run.json; exact bytes pinned (sorted key order).
     #[test]
-    fn run_and_analyzer_doc_shape() {
+    fn run_doc_shape() {
         let m = meta();
         assert_eq!(
             run_json(&m, m.completed_at_us),
             "{\"completed_at\":2,\"error\":null,\"run_id\":\"r0\",\
              \"run_name\":\"job\",\"started_at\":1,\"status\":4,\
              \"total_ranks\":8}"
-        );
-        let payloads = analyzer_payloads(&m, &[]);
-        assert_eq!(payloads.len(), 10);
-        assert_eq!(
-            payloads[0].1,
-            "{\"analysis_pending\":true,\"analyzer_id\":1001,\
-             \"name\":\"LlmFailureAnalyzer\",\"total_ranks\":8}"
         );
     }
 
@@ -1759,26 +1665,16 @@ mod tests {
         }
     }
 
-    fn doc_1009(m: &RunMeta) -> String {
-        analyzer_payloads(m, &[])
-            .into_iter()
-            .find(|(aid, _)| *aid == 1009)
-            .unwrap()
-            .1
-    }
-
     const REMOTE_URI: &str = "s3://bucket/outputs/j/profiling/traces/step_000000000106";
 
-    /// Some(source) → all three provenance sites record the SUBMITTED
-    /// root, never the staged local dir.
+    /// Some(source) → both provenance sites record the SUBMITTED root,
+    /// never the staged local dir.
     #[test]
-    fn source_override_lands_in_all_three_docs() {
+    fn source_override_lands_in_both_docs() {
         let m = provenance_meta(Some(REMOTE_URI));
         let md = metadata_json(&m, &[]);
         assert!(md.contains(&format!("\"trace_folder_path\":\"{REMOTE_URI}\"")));
         assert!(!md.contains("/stage/"));
-
-        assert!(doc_1009(&m).contains(&format!("\"trace_folder_path\":\"{REMOTE_URI}\"")));
 
         let tmp = tempfile::tempdir().unwrap();
         let counts = StatusCounts {
@@ -1796,17 +1692,10 @@ mod tests {
         assert!(!config.contains("/stage/"));
     }
 
-    /// None → every site records `trace_root` itself; the flat 1009 doc's
-    /// exact shape is pinned.
+    /// None → every site records `trace_root` itself.
     #[test]
     fn absent_override_keeps_trace_root() {
         let m = provenance_meta(None);
-        assert_eq!(
-            doc_1009(&m),
-            "{\"analyzer_id\":1009,\"is_folder_sharded\":false,\
-             \"name\":\"DumpTraceFolderAnalyzer\",\
-             \"trace_folder_path\":\"/stage/step_000000000106\"}"
-        );
         assert!(
             metadata_json(&m, &[]).contains("\"trace_folder_path\":\"/stage/step_000000000106\"")
         );

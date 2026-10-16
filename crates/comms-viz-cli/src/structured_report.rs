@@ -4,12 +4,15 @@
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree.
 
-//! Structured report: the HTML report's data and derived tables as
-//! a Markdown index plus compact CSVs instead of an interactive page.
+//! Structured report: a summary of the run for scripts and LLM agents, as
+//! `README.md` plus the same content in `summary.json`.
 //!
-//! The cohort, imbalance, arrival and utilization rules mirror the page's
-//! JavaScript (`pl.cohorts` and friends in static_page.html), so both
-//! reports agree on who the straggler is.
+//! Its size does not grow with world size: every list is a top-K or a
+//! distribution, so a 50k-rank run reads like an 8-rank one. Cross-rank
+//! matching follows the page's JavaScript (`pl.cohorts` in
+//! static_page.html): calls pair across ranks by (process group, step,
+//! collective, c10d sequence, occurrence), and calls without a sequence or
+//! p2p calls join no cohort.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -20,19 +23,39 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use rayon::prelude::*;
+use serde_json::json;
 
+use crate::diagnostics::Activity;
+use crate::diagnostics::Diagnostics;
+use crate::diagnostics::num;
+use crate::diagnostics::rank_ranges;
+use crate::diagnostics::table_from_csv;
+use crate::diagnostics::table_from_member;
 use crate::publish::RunData;
 
+/// Rows in each top-K table.
 const TOP: usize = 10;
-const TOP_PER_GROUP: usize = 5;
-const IMBALANCE_ROWS: usize = 200;
+/// Ranks in the straggler table.
+const TOP_RANKS: usize = 20;
+/// Worst cohorts kept per group before the axis-wide top-K.
+const WORST_PER_GROUP: usize = 3;
+/// Robust z-score (median / MAD) beyond which a rank is an outlier...
+const OUTLIER_Z: f64 = 4.0;
+/// ...if it is also this far from the median, relative to the median.
+const OUTLIER_REL: f64 = 0.05;
+/// A group whose median bus bandwidth is below this share of its axis'
+/// median for the same collective is slow.
+const SLOW_GROUP_SHARE: f64 = 0.75;
+/// A rank is a straggler suspect from this z-score of its last-arrival
+/// count against chance.
+const STRAGGLER_Z: f64 = 4.0;
 
 #[derive(Clone, Debug)]
 struct Event {
     rank: i64,
     ts: f64,
     dur: f64,
-    name: String,
     original_name: String,
     sequence: Option<String>,
     pg: String,
@@ -42,112 +65,41 @@ struct Event {
     out_n: f64,
     group_size: i64,
     step: Option<i64>,
+    /// c10d send/recv, whose sequence is 0 on every call.
+    p2p: bool,
+    /// Grouping key parts of the page's `instancesOf`: p2p direction and
+    /// peer, CUDA-graph replay, and whether this is a communication kernel
+    /// (else a copy or local work the call tagged).
+    operation: String,
+    peer: String,
+    replay: String,
+    comm_kernel: bool,
 }
 
-struct Table {
-    names: Vec<String>,
-    cols: Vec<Vec<String>>,
-}
-
-impl Table {
-    fn nrows(&self) -> usize {
-        self.cols.first().map_or(0, Vec::len)
-    }
-
-    fn col(&self, name: &str) -> Option<&[String]> {
-        let index = self.names.iter().position(|n| n == name)?;
-        Some(&self.cols[index])
-    }
-}
-
-/// Minimal RFC 4180 reader for the raw-CSV member fallback.
-fn parse_csv(text: &str) -> Vec<Vec<String>> {
-    let mut rows = Vec::new();
-    let mut row = Vec::new();
-    let mut field = String::new();
-    let mut quoted = false;
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match (quoted, c) {
-            (true, '"') if chars.peek() == Some(&'"') => {
-                chars.next();
-                field.push('"');
-            }
-            (true, '"') => quoted = false,
-            (true, _) => field.push(c),
-            (false, '"') => quoted = true,
-            (false, ',') => row.push(std::mem::take(&mut field)),
-            (false, '\n') => {
-                row.push(std::mem::take(&mut field));
-                rows.push(std::mem::take(&mut row));
-            }
-            (false, '\r') => {}
-            (false, _) => field.push(c),
-        }
-    }
-    if !field.is_empty() || !row.is_empty() {
-        row.push(field);
-        rows.push(row);
-    }
-    rows
-}
-
-fn table_from_csv(text: &str) -> Table {
-    let mut rows = parse_csv(text).into_iter();
-    let names = rows.next().unwrap_or_default();
-    let mut cols = vec![Vec::new(); names.len()];
-    for row in rows.filter(|row| row.len() == names.len()) {
-        for (col, value) in cols.iter_mut().zip(row) {
-            col.push(value);
-        }
-    }
-    Table { names, cols }
-}
-
-fn table_from_member(payload: &[u8]) -> Table {
-    if payload.starts_with(b"DPG1") {
-        let (names, cols) = comms_viz_core::dpg::decode_member(payload);
-        Table { names, cols }
-    } else {
-        table_from_csv(&String::from_utf8_lossy(payload))
-    }
-}
-
-fn num(value: &str) -> f64 {
-    value.parse().unwrap_or(0.0)
-}
-
-fn events_from_table(table: &Table) -> Vec<Event> {
+fn events_from_table(table: &crate::diagnostics::Table) -> Vec<Event> {
     let get = |name: &str, row: usize| table.col(name).map(|col| col[row].as_str());
     let optional = |name: &str, row: usize| get(name, row).filter(|v| !v.is_empty());
     (0..table.nrows())
         .filter(|&row| get("para_type", row) != Some("flash"))
         .map(|row| {
-            let raw = get("name", row).unwrap_or("").to_string();
+            let raw = get("name", row).unwrap_or("");
+            let collective = get("collective_name", row).unwrap_or("").to_string();
             let operation = optional("operation", row);
-            let name = match operation {
-                Some("send") => format!(
-                    "Send -> rank {}",
-                    optional("dst_rank", row).unwrap_or("unknown")
-                ),
-                Some("recv") => format!(
-                    "Recv <- rank {}",
-                    optional("src_rank", row).unwrap_or("unknown")
-                ),
-                _ if raw.to_ascii_lowercase().contains("sendrecv") => {
-                    "SendRecv (direction unknown)".to_string()
-                }
-                _ => raw.clone(),
+            let peer = match operation {
+                Some("send") => optional("dst_rank", row),
+                Some("recv") => optional("src_rank", row),
+                _ => None,
             };
             Event {
                 rank: num(get("rank", row).unwrap_or("0")) as i64,
                 ts: num(get("ts", row).unwrap_or("0")),
                 dur: num(get("dur", row).unwrap_or("0")),
-                original_name: optional("original_name", row).unwrap_or(&raw).to_string(),
-                name,
+                original_name: optional("original_name", row).unwrap_or(raw).to_string(),
                 sequence: optional("sequence_id", row).map(str::to_string),
                 pg: get("pg_name", row).unwrap_or("").to_string(),
-                collective: get("collective_name", row).unwrap_or("").to_string(),
+                p2p: matches!(operation, Some("send" | "recv"))
+                    || matches!(collective.as_str(), "send" | "recv"),
+                collective,
                 dtype: get("dtype", row).unwrap_or("").to_string(),
                 in_n: get("in_nelems", row).map_or(-1.0, num),
                 out_n: get("out_nelems", row).map_or(-1.0, num),
@@ -156,6 +108,75 @@ fn events_from_table(table: &Table) -> Vec<Event> {
                     .map(num)
                     .filter(|step| *step >= 0.0)
                     .map(|step| step as i64),
+                operation: operation.unwrap_or_default().to_string(),
+                peer: peer.unwrap_or_default().to_string(),
+                replay: optional("replay_id", row).unwrap_or_default().to_string(),
+                comm_kernel: get("comm_kernel", row).is_none_or(|v| num(v) == 1.0),
+            }
+        })
+        .collect()
+}
+
+/// One instance per collective call on each rank (the page's `instancesOf`):
+/// consecutive events of one PG with the same step, collective, sequence,
+/// p2p direction and peer, and graph replay, e.g. a copy-engine
+/// collective's copies, merge into one call. A call with a communication
+/// kernel spans its kernels; one made only of copies spans all of them.
+/// Events without a sequence stay single.
+fn instances(events: &[Event]) -> Vec<Event> {
+    let mut order: Vec<usize> = (0..events.len()).collect();
+    order.sort_by(|&a, &b| {
+        events[a]
+            .rank
+            .cmp(&events[b].rank)
+            .then(events[a].ts.total_cmp(&events[b].ts))
+    });
+    struct Call {
+        first: Event,
+        kernels: Option<(f64, f64)>,
+        all: (f64, f64),
+    }
+    let mut out: Vec<Call> = Vec::new();
+    let mut open: HashMap<(i64, &str), (String, usize)> = HashMap::new();
+    for i in order {
+        let ev = &events[i];
+        let key = ev.sequence.as_ref().map(|seq| {
+            format!(
+                "{:?}\0{}\0{seq}\0{}\0{}\0{}",
+                ev.step, ev.collective, ev.operation, ev.peer, ev.replay
+            )
+        });
+        let span = (ev.ts, ev.ts + ev.dur);
+        if let Some(key) = &key {
+            if let Some((last_key, idx)) = open.get(&(ev.rank, ev.pg.as_str())) {
+                if last_key == key {
+                    let call = &mut out[*idx];
+                    if ev.comm_kernel {
+                        let k = call.kernels.get_or_insert(span);
+                        *k = (k.0.min(span.0), k.1.max(span.1));
+                    }
+                    call.all = (call.all.0.min(span.0), call.all.1.max(span.1));
+                    continue;
+                }
+            }
+        }
+        open.insert(
+            (ev.rank, ev.pg.as_str()),
+            (key.unwrap_or_default(), out.len()),
+        );
+        out.push(Call {
+            first: ev.clone(),
+            kernels: ev.comm_kernel.then_some(span),
+            all: span,
+        });
+    }
+    out.into_iter()
+        .map(|call| {
+            let (a, b) = call.kernels.unwrap_or(call.all);
+            Event {
+                ts: a,
+                dur: b - a,
+                ..call.first
             }
         })
         .collect()
@@ -171,11 +192,16 @@ struct Cohort {
     quick: usize,
 }
 
-fn cohorts(events: &[Event]) -> (Vec<Cohort>, bool) {
-    let by_seq = events.iter().any(|e| e.sequence.is_some());
+/// Calls that pair across ranks. Calls without a sequence and p2p calls
+/// join none: only their position would pair them, and one call missing
+/// from a rank's capture would silently mispair every later one.
+fn cohorts(events: &[Event]) -> Vec<Cohort> {
     let mut rank_order = Vec::new();
     let mut per_rank: HashMap<i64, Vec<usize>> = HashMap::new();
     for (i, e) in events.iter().enumerate() {
+        if e.sequence.is_none() || e.p2p {
+            continue;
+        }
         per_rank
             .entry(e.rank)
             .or_insert_with(|| {
@@ -191,28 +217,25 @@ fn cohorts(events: &[Event]) -> (Vec<Cohort>, bool) {
             .get_mut(&rank)
             .expect("should have an entry for every rank in rank_order");
         evs.sort_by(|a, b| events[*a].ts.total_cmp(&events[*b].ts));
+        // Occurrence within the key: CUDA-graph replays repeat a sequence.
         let mut occurrences: HashMap<String, usize> = HashMap::new();
-        for (k, &i) in evs.iter().enumerate() {
+        for &i in evs.iter() {
             let ev = &events[i];
-            let base = match (&ev.sequence, by_seq) {
-                (None, true) => continue,
-                (Some(seq), true) => format!(
-                    "{}\0{}\0{seq}",
-                    ev.pg,
-                    ev.step.map_or("?".to_string(), |s| s.to_string())
-                ),
-                (_, false) => format!("ordinal\0{k}"),
-            };
+            let seq = ev.sequence.as_deref().unwrap_or_default();
+            let base = format!(
+                "{}\0{}\0{}\0{seq}",
+                ev.pg,
+                ev.step.map_or("?".to_string(), |s| s.to_string()),
+                ev.collective
+            );
             let occurrence = occurrences.entry(base.clone()).or_default();
             let key = format!("{base}\0{occurrence}");
             *occurrence += 1;
             let index = *by_key.entry(key).or_insert_with(|| {
                 list.push(Cohort {
-                    seq: if let Some(seq) = &ev.sequence {
-                        seq.parse::<i64>().map_or(seq.clone(), |n| n.to_string())
-                    } else {
-                        k.to_string()
-                    },
+                    seq: seq
+                        .parse::<i64>()
+                        .map_or(seq.to_string(), |n| n.to_string()),
                     step: ev.step,
                     matched: true,
                     members: Vec::new(),
@@ -223,7 +246,7 @@ fn cohorts(events: &[Event]) -> (Vec<Cohort>, bool) {
                 list.len() - 1
             });
             let c = &mut list[index];
-            if events[c.ear].original_name != ev.original_name {
+            if match_name(&events[c.ear]) != match_name(ev) {
                 c.matched = false;
             }
             if c.step != ev.step {
@@ -241,7 +264,15 @@ fn cohorts(events: &[Event]) -> (Vec<Cohort>, bool) {
             }
         }
     }
-    (list, by_seq)
+    list
+}
+
+fn match_name(e: &Event) -> &str {
+    if e.collective.is_empty() {
+        &e.original_name
+    } else {
+        &e.collective
+    }
 }
 
 fn cohort_complete(c: &Cohort, events: &[Event]) -> bool {
@@ -327,99 +358,13 @@ fn bw_kind(members: &[usize], events: &[Event]) -> (bool, Option<f64>) {
 }
 
 fn display_name(e: &Event) -> &str {
-    if e.collective.is_empty() {
-        &e.name
-    } else {
-        let c = e.collective.as_str();
-        c.strip_suffix("_into_tensor")
-            .or_else(|| c.strip_suffix("_tensor"))
-            .unwrap_or(c)
+    let c = e.collective.as_str();
+    if c.is_empty() {
+        return &e.original_name;
     }
-}
-
-fn percentile(sorted: &[usize], p: f64) -> usize {
-    let index = ((p * sorted.len() as f64).ceil() as usize).saturating_sub(1);
-    sorted[index.min(sorted.len() - 1)]
-}
-
-fn union_duration(mut spans: Vec<(f64, f64)>) -> f64 {
-    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let (mut total, mut end) = (0.0, f64::NEG_INFINITY);
-    for (a, b) in spans {
-        if a > end {
-            total += b - a;
-        } else if b > end {
-            total += b - end;
-        }
-        end = end.max(b);
-    }
-    total
-}
-
-fn csv_field(value: &str) -> String {
-    if value.contains([',', '"', '\n']) {
-        format!("\"{}\"", value.replace('"', "\"\""))
-    } else {
-        value.to_string()
-    }
-}
-
-struct Csv(String);
-
-impl Csv {
-    fn new(header: &[&str]) -> Self {
-        Csv(header.join(",") + "\n")
-    }
-
-    fn row(&mut self, fields: &[String]) {
-        let fields: Vec<String> = fields.iter().map(|f| csv_field(f)).collect();
-        self.0.push_str(&fields.join(","));
-        self.0.push('\n');
-    }
-}
-
-/// One decimal, without a trailing ".0".
-fn d1(value: f64) -> String {
-    let s = format!("{value:.1}");
-    s.strip_suffix(".0").map_or(s.clone(), str::to_string)
-}
-
-/// Whole numbers from 100 up, one decimal below.
-fn short(value: f64) -> String {
-    if value.abs() >= 100.0 {
-        format!("{value:.0}")
-    } else {
-        d1(value)
-    }
-}
-
-fn pct(value: f64, window: f64) -> String {
-    if window > 0.0 {
-        d1(100.0 * value / window)
-    } else {
-        String::new()
-    }
-}
-
-/// "0-3,8,10-11"
-fn rank_ranges(ranks: &[i64]) -> String {
-    let mut out: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < ranks.len() {
-        let mut j = i;
-        while j + 1 < ranks.len() && ranks[j + 1] == ranks[j] + 1 {
-            j += 1;
-        }
-        out.push(if j > i + 1 {
-            format!("{}-{}", ranks[i], ranks[j])
-        } else if j == i + 1 {
-            format!("{},{}", ranks[i], ranks[j])
-        } else {
-            ranks[i].to_string()
-        });
-        i = j + 1;
-    }
-    out.join(",")
+    c.strip_suffix("_into_tensor")
+        .or_else(|| c.strip_suffix("_tensor"))
+        .unwrap_or(c)
 }
 
 /// `tp_<40 hex>` groups become `tp0`, `tp1`, ... ordered by lowest rank;
@@ -450,66 +395,236 @@ fn group_aliases(groups: &[(String, i64)]) -> Vec<String> {
     aliases
 }
 
-/// Sort key putting `tp2` before `tp10`.
-fn alias_order(alias: &str) -> (String, u64) {
-    let prefix = alias.trim_end_matches(|c: char| c.is_ascii_digit());
-    (
-        prefix.to_string(),
-        alias[prefix.len()..].parse().unwrap_or(0),
-    )
+/// The parallelism axis of a per-PG stem (`tp_<hash>`, `pp_p2p_round_0_<hash>-r4`):
+/// the longest axis name in the PG map that prefixes it.
+fn axis_of<'a>(stem: &str, axes: &'a [String]) -> &'a str {
+    axes.iter()
+        .filter(|a| {
+            stem.strip_prefix(a.as_str())
+                .is_some_and(|rest| rest.starts_with('_'))
+        })
+        .max_by_key(|a| a.len())
+        .map_or("other", String::as_str)
 }
 
-/// Smallest 1/2/5 x 10^k at or above `value`.
-fn nice_ceil(value: f64) -> f64 {
-    let base = 10f64.powf(value.log10().floor());
-    [1.0, 2.0, 5.0, 10.0]
-        .into_iter()
-        .map(|m| m * base)
-        .find(|v| *v >= value)
-        .unwrap_or(10.0 * base)
+/// One decimal, without a trailing ".0".
+fn d1(value: f64) -> String {
+    let s = format!("{value:.1}");
+    s.strip_suffix(".0").map_or(s.clone(), str::to_string)
 }
 
-struct Activity {
-    rank: i64,
-    gpu: f64,
-    compute: f64,
-    cpu: f64,
-    window: f64,
+fn sorted(mut values: Vec<f64>) -> Vec<f64> {
+    values.retain(|v| v.is_finite());
+    values.sort_by(f64::total_cmp);
+    values
 }
 
-struct PmSample {
-    rank: i64,
-    metric: String,
-    ts: f64,
-    value: f64,
+/// Nearest-rank percentile of sorted values.
+fn pctl(sorted: &[f64], p: f64) -> f64 {
+    if sorted.is_empty() {
+        return f64::NAN;
+    }
+    let i = ((p * sorted.len() as f64).ceil() as usize).clamp(1, sorted.len()) - 1;
+    sorted[i]
 }
 
-struct Group {
-    stem: String,
-    alias: String,
-    events: Vec<Event>,
-    ranks: Vec<i64>,
+fn dist(values: Vec<f64>) -> serde_json::Value {
+    let s = sorted(values);
+    if s.is_empty() {
+        return serde_json::Value::Null;
+    }
+    json!({
+        "n": s.len(),
+        "p50": pctl(&s, 0.5),
+        "p90": pctl(&s, 0.9),
+        "p99": pctl(&s, 0.99),
+        "max": s[s.len() - 1],
+    })
 }
 
-struct Worst {
-    step: String,
+#[derive(Clone)]
+struct WorstCohort {
+    group: usize,
+    step: Option<i64>,
     seq: String,
-    collective: String,
+    op: String,
     min_dur: f64,
+    spread: f64,
     first: i64,
     last: i64,
-    spread_pct: f64,
 }
 
-struct GroupStats {
-    alias: String,
+#[derive(Default, Clone, Copy)]
+struct Arrivals {
+    cohorts: u32,
+    last: u32,
+    /// Expected last-arrival count by chance: sum of 1/n over cohorts.
+    expected: f64,
+    /// Variance of the last-arrival count by chance: sum of p(1-p).
+    variance: f64,
+    /// Sum over cohorts of (this rank's start - earliest start), us.
+    lag: f64,
+}
+
+impl Arrivals {
+    fn add(&mut self, other: &Arrivals) {
+        self.cohorts += other.cohorts;
+        self.last += other.last;
+        self.expected += other.expected;
+        self.variance += other.variance;
+        self.lag += other.lag;
+    }
+
+    fn z(&self) -> f64 {
+        if self.variance > 0.0 {
+            (self.last as f64 - self.expected) / self.variance.sqrt()
+        } else {
+            0.0
+        }
+    }
+}
+
+/// What one process group contributes to the report.
+struct GroupSummary {
     stem: String,
+    axis: String,
     ranks: Vec<i64>,
     kernels: usize,
+    no_seq: usize,
+    p2p: usize,
     complete: usize,
-    by_seq: bool,
-    worst: Vec<Worst>,
-    last_arrivals: Vec<(i64, usize, usize)>,
+    incomplete: usize,
+    spreads: Vec<f64>,
+    /// Bus bandwidth (GB/s) of complete cohorts, by collective.
+    busbw: BTreeMap<String, Vec<f64>>,
+    worst: Vec<WorstCohort>,
+    arrivals: Vec<(i64, Arrivals)>,
+}
+
+fn summarize_group(index: usize, stem: &str, axis: &str, raw: &[Event]) -> GroupSummary {
+    let calls = instances(raw);
+    let events = &calls[..];
+    let ranks: Vec<i64> = events
+        .iter()
+        .map(|e| e.rank)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let list = cohorts(events);
+    let mut summary = GroupSummary {
+        stem: stem.to_string(),
+        axis: axis.to_string(),
+        ranks,
+        kernels: raw.len(),
+        no_seq: events.iter().filter(|e| e.sequence.is_none()).count(),
+        p2p: events
+            .iter()
+            .filter(|e| e.p2p && e.sequence.is_some())
+            .count(),
+        complete: 0,
+        incomplete: 0,
+        spreads: Vec::new(),
+        busbw: BTreeMap::new(),
+        worst: Vec::new(),
+        arrivals: Vec::new(),
+    };
+    let mut arrivals: BTreeMap<i64, Arrivals> = BTreeMap::new();
+    for c in &list {
+        if !cohort_complete(c, events) {
+            summary.incomplete += 1;
+            continue;
+        }
+        summary.complete += 1;
+        let (ear, lat, quick) = (&events[c.ear], &events[c.lat], &events[c.quick]);
+        let spread = lat.ts - ear.ts;
+        summary.spreads.push(spread);
+        let payload = payload_bytes(&c.members, events);
+        if let (true, Some(factor)) = bw_kind(&c.members, events) {
+            if quick.dur > 0.0 && payload > 0.0 {
+                summary
+                    .busbw
+                    .entry(display_name(ear).to_string())
+                    .or_default()
+                    .push(payload / quick.dur / 1000.0 * factor);
+            }
+        }
+        summary.worst.push(WorstCohort {
+            group: index,
+            step: c.step,
+            seq: c.seq.clone(),
+            op: display_name(ear).to_string(),
+            min_dur: quick.dur,
+            spread,
+            first: ear.rank,
+            last: lat.rank,
+        });
+        let n = c.members.len() as f64;
+        let p = 1.0 / n;
+        for &i in &c.members {
+            let a = arrivals.entry(events[i].rank).or_default();
+            a.cohorts += 1;
+            a.last += u32::from(i == c.lat);
+            a.expected += p;
+            a.variance += p * (1.0 - p);
+            a.lag += events[i].ts - ear.ts;
+        }
+    }
+    summary.worst.sort_by(|a, b| b.spread.total_cmp(&a.spread));
+    summary.worst.truncate(WORST_PER_GROUP);
+    summary.arrivals = arrivals.into_iter().collect();
+    summary
+}
+
+/// Robust outliers of one per-rank metric: |x - median| beyond both
+/// `OUTLIER_Z` scaled MADs and `OUTLIER_REL` of the median.
+fn outliers(values: &[(i64, f64)]) -> (f64, Vec<(i64, f64, f64)>) {
+    let s = sorted(values.iter().map(|(_, v)| *v).collect());
+    if s.len() < 4 {
+        return (f64::NAN, Vec::new());
+    }
+    let median = pctl(&s, 0.5);
+    let mad = pctl(&sorted(s.iter().map(|v| (v - median).abs()).collect()), 0.5) * 1.4826;
+    let floor = (OUTLIER_REL * median.abs()).max(1e-9);
+    let mut out: Vec<(i64, f64, f64)> = values
+        .iter()
+        .filter(|(_, v)| v.is_finite() && (v - median).abs() > floor)
+        .map(|&(rank, v)| {
+            let z = if mad > 0.0 {
+                (v - median) / mad
+            } else {
+                f64::INFINITY.copysign(v - median)
+            };
+            (rank, v, z)
+        })
+        .filter(|(_, _, z)| z.abs() >= OUTLIER_Z)
+        .collect();
+    out.sort_by(|a, b| b.2.abs().total_cmp(&a.2.abs()));
+    (median, out)
+}
+
+/// Rank -> host from `rank_map.json` (`runs` of [start, len, host index, _]).
+fn rank_hosts(rank_map_json: Option<&str>) -> HashMap<i64, String> {
+    let Some(doc) = rank_map_json.and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
+    else {
+        return HashMap::new();
+    };
+    let hosts: Vec<&str> = doc["hosts"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|h| h.as_str()).collect())
+        .unwrap_or_default();
+    let mut out = HashMap::new();
+    for run in doc["runs"].as_array().into_iter().flatten() {
+        let (Some(start), Some(len), Some(h)) = (run[0].as_i64(), run[1].as_i64(), run[2].as_i64())
+        else {
+            continue;
+        };
+        if let Some(host) = usize::try_from(h).ok().and_then(|h| hosts.get(h)) {
+            for r in start..start + len {
+                out.insert(r, host.to_string());
+            }
+        }
+    }
+    out
 }
 
 fn write(path: &Path, text: &str) -> Result<()> {
@@ -519,519 +634,698 @@ fn write(path: &Path, text: &str) -> Result<()> {
 /// Write one run's structured report into `dest/<stem>/`.
 pub(crate) fn write_structured_report(data: &RunData, stem: &str, dest: &Path) -> Result<()> {
     let dir = dest.join(stem);
-    // Start empty: a rerun can drop groups or optional tables, whose files
-    // from the previous run would otherwise remain.
+    // Start empty: files of an earlier report version would otherwise remain.
     if dir.exists() {
         std::fs::remove_dir_all(&dir).with_context(|| format!("clear {}", dir.display()))?;
     }
-    let groups_dir = dir.join("groups");
-    std::fs::create_dir_all(&groups_dir)
-        .with_context(|| format!("create {}", groups_dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
 
-    let mut pm_samples: Vec<PmSample> = Vec::new();
-    let mut activity: Vec<Activity> = Vec::new();
-    let mut groups: Vec<Group> = Vec::new();
-    for (group, _, path) in &data.per_pg_all {
-        let payload = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-        let table = table_from_member(&payload);
-        if group != comms_viz_core::analysis::DIAGNOSTICS_PG {
-            let events = events_from_table(&table);
-            let ranks: Vec<i64> = events
-                .iter()
-                .map(|e| e.rank)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            groups.push(Group {
-                stem: group.clone(),
-                alias: String::new(),
-                events,
-                ranks,
-            });
-            continue;
-        }
-        let get = |name: &str, row: usize| table.col(name).map_or("", |c| c[row].as_str());
-        for row in 0..table.nrows() {
-            let rank = num(get("rank", row)) as i64;
-            if get("kind", row) == "pm" {
-                pm_samples.push(PmSample {
-                    rank,
-                    metric: get("metric", row).to_string(),
-                    ts: num(get("ts", row)),
-                    value: num(get("value", row)),
-                });
-            } else {
-                activity.push(Activity {
-                    rank,
-                    gpu: num(get("gpu_busy", row)),
-                    compute: num(get("compute", row)),
-                    cpu: num(get("cpu_active", row)),
-                    window: num(get("window", row)),
-                });
-            }
-        }
-    }
+    let axes: Vec<String> = data
+        .pg_map_json
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    let members: Vec<&(String, u64, std::path::PathBuf)> = data
+        .per_pg_all
+        .iter()
+        .filter(|(s, _, _)| s != comms_viz_core::analysis::DIAGNOSTICS_PG)
+        .collect();
+    let groups: Vec<GroupSummary> = members
+        .par_iter()
+        .enumerate()
+        .map(|(i, (stem, _, path))| -> Result<GroupSummary> {
+            let payload =
+                std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+            let events = events_from_table(&table_from_member(&payload));
+            Ok(summarize_group(i, stem, axis_of(stem, &axes), &events))
+        })
+        .collect::<Result<_>>()?;
     let keys: Vec<(String, i64)> = groups
         .iter()
         .map(|g| (g.stem.clone(), g.ranks.first().copied().unwrap_or(0)))
         .collect();
-    for (g, alias) in groups.iter_mut().zip(group_aliases(&keys)) {
-        g.alias = alias;
-    }
-    groups.sort_by_key(|g| alias_order(&g.alias));
-    let t0 = groups
-        .iter()
-        .flat_map(|g| g.events.iter().map(|e| e.ts))
-        .chain(pm_samples.iter().map(|s| s.ts))
-        .fold(f64::INFINITY, f64::min);
-    let t0 = if t0.is_finite() { t0 } else { 0.0 };
-
-    let mut imbalance = Csv::new(&[
-        "group",
-        "step",
-        "seq",
-        "op",
-        "bytes",
-        "dur",
-        "algbw_gbps",
-        "busbw_gbps",
-        "first",
-        "last",
-        "t",
-        "spread",
-        "spread_pct",
-    ]);
-    let mut arrivals = Csv::new(&["group", "rank", "op", "last", "runs", "pos_p50", "pos_p90"]);
-    let mut comm_csv = Csv::new(&["group", "rank", "comm", "comm_pct"]);
-    let window_of: HashMap<i64, f64> = activity.iter().map(|a| (a.rank, a.window)).collect();
-    let mut imbalance_rows: Vec<(f64, Vec<String>)> = Vec::new();
-    let mut group_stats = Vec::new();
-
-    for g in &groups {
-        let events = &g.events;
-        let (list, by_seq) = cohorts(events);
-        let complete: Vec<&Cohort> = list.iter().filter(|c| cohort_complete(c, events)).collect();
-        write(
-            &groups_dir.join(format!("{}.csv", g.alias)),
-            &timeline(events, t0),
-        )?;
-
-        let mut worst = Vec::new();
-        for c in &complete {
-            let (ear, lat, quick) = (&events[c.ear], &events[c.lat], &events[c.quick]);
-            let payload = payload_bytes(&c.members, events);
-            let bandwidth = if quick.dur > 0.0 && payload > 0.0 {
-                payload / quick.dur / 1000.0
-            } else {
-                0.0
-            };
-            let (alg, bus) = bw_kind(&c.members, events);
-            let spread = lat.ts - ear.ts;
-            let spread_pct = if ear.dur > 0.0 {
-                spread / ear.dur * 100.0
-            } else {
-                0.0
-            };
-            let step = c.step.map_or(String::new(), |s| s.to_string());
-            imbalance_rows.push((
-                spread_pct,
-                vec![
-                    g.alias.clone(),
-                    step.clone(),
-                    c.seq.clone(),
-                    display_name(ear).to_string(),
-                    format!("{payload}"),
-                    d1(quick.dur),
-                    if alg { d1(bandwidth) } else { String::new() },
-                    match bus {
-                        Some(factor) if alg => d1(bandwidth * factor),
-                        _ => String::new(),
-                    },
-                    ear.rank.to_string(),
-                    lat.rank.to_string(),
-                    d1(ear.ts - t0),
-                    d1(spread),
-                    format!("{spread_pct:.0}"),
-                ],
-            ));
-            worst.push(Worst {
-                step,
-                seq: c.seq.clone(),
-                collective: display_name(ear).to_string(),
-                min_dur: quick.dur,
-                first: ear.rank,
-                last: lat.rank,
-                spread_pct,
-            });
-        }
-        worst.sort_by(|a, b| b.spread_pct.total_cmp(&a.spread_pct));
-        worst.truncate(TOP_PER_GROUP);
-
-        let mut stats: BTreeMap<(i64, String), (usize, Vec<usize>)> = BTreeMap::new();
-        for c in &complete {
-            let mut ordered = c.members.clone();
-            ordered.sort_by(|a, b| events[*a].ts.total_cmp(&events[*b].ts));
-            let name = display_name(&events[c.ear]).to_string();
-            for (position, &i) in ordered.iter().enumerate() {
-                let entry = stats.entry((events[i].rank, name.clone())).or_default();
-                entry.0 += usize::from(position == ordered.len() - 1);
-                entry.1.push(position + 1);
-            }
-        }
-        let mut last_by_rank: BTreeMap<i64, (usize, usize)> = BTreeMap::new();
-        for ((rank, name), (latest, positions)) in &mut stats {
-            positions.sort_unstable();
-            arrivals.row(&[
-                g.alias.clone(),
-                rank.to_string(),
-                name.clone(),
-                latest.to_string(),
-                positions.len().to_string(),
-                percentile(positions, 0.5).to_string(),
-                percentile(positions, 0.9).to_string(),
-            ]);
-            let total = last_by_rank.entry(*rank).or_default();
-            total.0 += *latest;
-            total.1 += positions.len();
-        }
-        let mut last_arrivals: Vec<(i64, usize, usize)> = last_by_rank
-            .into_iter()
-            .filter(|(_, (latest, _))| *latest > 0)
-            .map(|(rank, (latest, runs))| (rank, latest, runs))
-            .collect();
-        last_arrivals.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-
-        let mut spans: BTreeMap<i64, Vec<(f64, f64)>> = BTreeMap::new();
-        for e in events {
-            spans.entry(e.rank).or_default().push((e.ts, e.ts + e.dur));
-        }
-        for (rank, spans) in spans {
-            let us = union_duration(spans);
-            comm_csv.row(&[
-                g.alias.clone(),
-                rank.to_string(),
-                format!("{us:.0}"),
-                pct(us, window_of.get(&rank).copied().unwrap_or(0.0)),
-            ]);
-        }
-
-        group_stats.push(GroupStats {
-            alias: g.alias.clone(),
-            stem: g.stem.clone(),
-            ranks: g.ranks.clone(),
-            kernels: events.len(),
-            complete: complete.len(),
-            by_seq,
-            worst,
-            last_arrivals,
-        });
-    }
-    imbalance_rows.sort_by(|a, b| b.0.total_cmp(&a.0));
-    for (_, row) in imbalance_rows.iter().take(IMBALANCE_ROWS) {
-        imbalance.row(row);
-    }
-
-    activity.sort_by_key(|a| a.rank);
-    let mut utilization = Csv::new(&["rank", "gpu_pct", "compute_pct", "cpu_pct", "window"]);
-    for a in &activity {
-        utilization.row(&[
-            a.rank.to_string(),
-            pct(a.gpu, a.window),
-            pct(a.compute, a.window),
-            pct(a.cpu, a.window),
-            format!("{:.0}", a.window),
-        ]);
-    }
-
-    write(&dir.join("breakdown.csv"), &breakdown(&data.breakdown_csv))?;
-    write(&dir.join("imbalance.csv"), &imbalance.0)?;
-    write(&dir.join("arrivals.csv"), &arrivals.0)?;
-    write(&dir.join("utilization.csv"), &utilization.0)?;
-    write(&dir.join("comm_by_group.csv"), &comm_csv.0)?;
-    let pm_bin = if pm_samples.is_empty() {
-        None
-    } else {
-        write(&dir.join("pm_summary.csv"), &pm_summary(&pm_samples))?;
-        let (text, bin) = pm_timeline(&pm_samples, t0);
-        write(&dir.join("pm_timeline.csv"), &text)?;
-        Some(bin)
-    };
+    let aliases = group_aliases(&keys);
+    let diag = crate::diagnostics::read(&data.per_pg_all)?;
+    let hosts = rank_hosts(data.rank_map_json.as_deref());
+    let summary = build_summary(data, &groups, &aliases, &diag, &hosts);
     write(
-        &dir.join("README.md"),
-        &readme(&ReadmeInput {
-            data,
-            t0,
-            groups: &group_stats,
-            activity: &activity,
-            pm_bin,
-        }),
+        &dir.join("summary.json"),
+        &serde_json::to_string_pretty(&summary)?,
     )?;
+    write(&dir.join("README.md"), &readme(&summary))?;
     eprintln!("comms_viz: wrote structured report {}", dir.display());
     Ok(())
 }
 
-/// One row per kernel, cohorts adjacent: sorted by step, seq, rank.
-fn timeline(events: &[Event], t0: f64) -> String {
-    let seq_of = |e: &Event| e.sequence.as_deref().and_then(|s| s.parse::<i64>().ok());
-    let mut order: Vec<&Event> = events.iter().collect();
-    order.sort_by(|a, b| {
-        (a.step, seq_of(a).is_none(), seq_of(a), a.rank)
-            .cmp(&(b.step, seq_of(b).is_none(), seq_of(b), b.rank))
-            .then(a.ts.total_cmp(&b.ts))
-    });
-    let mut csv = Csv::new(&["step", "seq", "rank", "op", "t", "dur", "bytes"]);
-    for e in order {
-        let bytes = payload_bytes(&[0], std::slice::from_ref(e));
-        csv.row(&[
-            e.step.map_or(String::new(), |s| s.to_string()),
-            e.sequence.clone().unwrap_or_default(),
-            e.rank.to_string(),
-            display_name(e).to_string(),
-            d1(e.ts - t0),
-            d1(e.dur),
-            if bytes > 0.0 {
-                format!("{bytes}")
-            } else {
-                String::new()
-            },
-        ]);
-    }
-    csv.0
-}
+fn build_summary(
+    data: &RunData,
+    groups: &[GroupSummary],
+    aliases: &[String],
+    diag: &Diagnostics,
+    hosts: &HashMap<i64, String>,
+) -> serde_json::Value {
+    let host_of = |rank: i64| hosts.get(&rank).cloned();
 
-/// Per-rank breakdown with all-zero columns dropped, rank first, whole us.
-fn breakdown(text: &str) -> String {
-    let table = table_from_csv(text);
-    let Some(rank_index) = table.names.iter().position(|n| n == "rank") else {
-        return text.to_string();
-    };
-    let keep: Vec<usize> = std::iter::once(rank_index)
-        .chain(
-            (0..table.names.len())
-                .filter(|&i| i != rank_index && table.cols[i].iter().any(|v| num(v) != 0.0)),
-        )
-        .collect();
-    let header: Vec<&str> = keep.iter().map(|&i| table.names[i].as_str()).collect();
-    let mut csv = Csv::new(&header);
-    let mut rows: Vec<usize> = (0..table.nrows()).collect();
-    rows.sort_by_key(|&r| num(&table.cols[rank_index][r]) as i64);
-    for r in rows {
-        let fields: Vec<String> = keep
+    // Axes: spread and bandwidth distributions, worst and slowest groups.
+    let mut by_axis: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, g) in groups.iter().enumerate() {
+        by_axis.entry(&g.axis).or_default().push(i);
+    }
+    let mut axis_docs = Vec::new();
+    let mut slow_groups_of_rank: HashMap<i64, (u32, u32)> = HashMap::new();
+    for (axis, idx) in &by_axis {
+        let gs: Vec<&GroupSummary> = idx.iter().map(|&i| &groups[i]).collect();
+        let sizes = sorted(gs.iter().map(|g| g.ranks.len() as f64).collect());
+        let mut busbw_all: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
+        for g in &gs {
+            for (op, v) in &g.busbw {
+                busbw_all.entry(op).or_default().extend(v);
+            }
+        }
+        let axis_median: BTreeMap<&str, f64> = busbw_all
             .iter()
-            .map(|&i| {
-                if i == rank_index {
-                    table.cols[i][r].clone()
-                } else {
-                    format!("{:.0}", num(&table.cols[i][r]))
-                }
+            .map(|(op, v)| (*op, pctl(&sorted(v.clone()), 0.5)))
+            .collect();
+        // Each group's bandwidth relative to its axis, for the busiest
+        // collective it shares with the axis.
+        let mut slow: Vec<(usize, String, f64, f64)> = Vec::new();
+        for &i in idx {
+            let g = &groups[i];
+            let Some((op, v)) = g.busbw.iter().max_by_key(|(_, v)| v.len()) else {
+                continue;
+            };
+            let med = pctl(&sorted(v.clone()), 0.5);
+            let share = med / axis_median[op.as_str()];
+            for &r in &g.ranks {
+                let e = slow_groups_of_rank.entry(r).or_default();
+                e.0 += 1;
+                e.1 += u32::from(share < SLOW_GROUP_SHARE);
+            }
+            if share < SLOW_GROUP_SHARE {
+                slow.push((i, op.clone(), med, share));
+            }
+        }
+        let slow_count = slow.len();
+        slow.sort_by(|a, b| a.3.total_cmp(&b.3));
+        let mut worst: Vec<WorstCohort> = gs.iter().flat_map(|g| g.worst.clone()).collect();
+        worst.sort_by(|a, b| b.spread.total_cmp(&a.spread));
+        let mut median_spread: Vec<(usize, f64)> = idx
+            .iter()
+            .filter(|&&i| !groups[i].spreads.is_empty())
+            .map(|&i| (i, pctl(&sorted(groups[i].spreads.clone()), 0.5)))
+            .collect();
+        median_spread.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let group_ref = |i: usize| {
+            json!({
+                "group": aliases[i],
+                "ranks": rank_ranges(&groups[i].ranks),
+                "pg": groups[i].stem,
             })
-            .collect();
-        csv.row(&fields);
+        };
+        axis_docs.push(json!({
+            "axis": axis,
+            "groups": gs.len(),
+            "group_size": {"min": sizes.first(), "max": sizes.last()},
+            "kernels": gs.iter().map(|g| g.kernels).sum::<usize>(),
+            "matched_collectives": gs.iter().map(|g| g.complete).sum::<usize>(),
+            "incomplete_collectives": gs.iter().map(|g| g.incomplete).sum::<usize>(),
+            "unmatchable_kernels": {
+                "no_sequence": gs.iter().map(|g| g.no_seq).sum::<usize>(),
+                "p2p": gs.iter().map(|g| g.p2p).sum::<usize>(),
+            },
+            "start_spread_us": dist(gs.iter().flat_map(|g| g.spreads.iter().copied()).collect()),
+            "busbw_gbps": busbw_all.into_iter().map(|(op, v)| (op.to_string(), dist(v))).collect::<serde_json::Map<_, _>>(),
+            "worst_collectives": worst.iter().take(TOP).map(|w| json!({
+                "group": aliases[w.group],
+                "step": w.step,
+                "seq": w.seq,
+                "op": w.op,
+                "spread_us": w.spread,
+                "min_dur_us": w.min_dur,
+                "first_rank": w.first,
+                "last_rank": w.last,
+            })).collect::<Vec<_>>(),
+            "highest_median_spread_groups": median_spread.iter().take(TOP).map(|&(i, m)| {
+                let mut doc = group_ref(i);
+                doc["median_spread_us"] = json!(m);
+                doc
+            }).collect::<Vec<_>>(),
+            "slow_groups": slow_count,
+            "slowest_groups": slow.iter().take(TOP).map(|(i, op, med, share)| {
+                let mut doc = group_ref(*i);
+                doc["op"] = json!(op);
+                doc["median_busbw_gbps"] = json!(med);
+                doc["share_of_axis_median"] = json!(share);
+                doc
+            }).collect::<Vec<_>>(),
+        }));
     }
-    csv.0
-}
 
-fn metric_order(samples: &[PmSample]) -> Vec<&str> {
-    let mut seen = HashSet::new();
-    samples
+    // Stragglers: last-arrival counts against chance, over every group.
+    let mut arrivals: HashMap<i64, Arrivals> = HashMap::new();
+    let mut arrivals_by_axis: HashMap<(i64, &str), Arrivals> = HashMap::new();
+    for g in groups {
+        for (rank, a) in &g.arrivals {
+            arrivals.entry(*rank).or_default().add(a);
+            arrivals_by_axis.entry((*rank, &g.axis)).or_default().add(a);
+        }
+    }
+    let mut stragglers: Vec<(i64, Arrivals)> = arrivals.iter().map(|(r, a)| (*r, *a)).collect();
+    stragglers.sort_by(|a, b| b.1.z().total_cmp(&a.1.z()).then(a.0.cmp(&b.0)));
+    let straggler_count = stragglers
         .iter()
-        .map(|s| s.metric.as_str())
-        .filter(|m| seen.insert(*m))
-        .collect()
-}
+        .filter(|(_, a)| a.z() >= STRAGGLER_Z)
+        .count();
+    let straggler_docs: Vec<serde_json::Value> = stragglers
+        .iter()
+        .take(TOP_RANKS)
+        .map(|(rank, a)| {
+            let per_axis: serde_json::Map<String, serde_json::Value> = by_axis
+                .keys()
+                .filter_map(|axis| {
+                    arrivals_by_axis
+                        .get(&(*rank, *axis))
+                        .map(|x| (axis.to_string(), json!(format!("{}/{}", x.last, x.cohorts))))
+                })
+                .collect();
+            json!({
+                "rank": rank,
+                "host": host_of(*rank),
+                "last": a.last,
+                "cohorts": a.cohorts,
+                "expected_last": a.expected,
+                "z": a.z(),
+                "mean_lag_us": if a.cohorts > 0 { a.lag / a.cohorts as f64 } else { 0.0 },
+                "last_by_axis": per_axis,
+            })
+        })
+        .collect();
 
-fn pm_summary(samples: &[PmSample]) -> String {
-    let mut by_key: BTreeMap<(&str, i64), Vec<f64>> = BTreeMap::new();
-    for s in samples {
-        by_key.entry((&s.metric, s.rank)).or_default().push(s.value);
-    }
-    let mut csv = Csv::new(&["metric", "rank", "n", "mean", "min", "max"]);
-    for ((metric, rank), values) in by_key {
-        let (lo, hi) = values
+    // Ranks that sit in slow groups more often than not: a slow link or
+    // node shows up as every group it touches being slow.
+    let mut slow_ranks: Vec<(i64, u32, u32)> = slow_groups_of_rank
+        .iter()
+        .filter(|(_, (n, slow))| *slow > 0 && 2 * slow >= *n)
+        .map(|(r, (n, slow))| (*r, *slow, *n))
+        .collect();
+    slow_ranks.sort_by(|a, b| {
+        (b.1 as f64 / b.2 as f64)
+            .total_cmp(&(a.1 as f64 / a.2 as f64))
+            .then(a.0.cmp(&b.0))
+    });
+
+    // Per-rank outliers: utilization, communication share, GPU counters.
+    let window_of: HashMap<i64, f64> = diag.activity.iter().map(|a| (a.rank, a.window)).collect();
+    let share = |a: &Activity, v: f64| {
+        if a.window > 0.0 {
+            100.0 * v / a.window
+        } else {
+            f64::NAN
+        }
+    };
+    let mut metrics: Vec<(String, Vec<(i64, f64)>)> = vec![
+        (
+            "GPU busy %".into(),
+            diag.activity
+                .iter()
+                .map(|a| (a.rank, share(a, a.gpu)))
+                .collect(),
+        ),
+        (
+            "compute kernels %".into(),
+            diag.activity
+                .iter()
+                .map(|a| (a.rank, share(a, a.compute)))
+                .collect(),
+        ),
+        (
+            "CPU active %".into(),
+            diag.activity
+                .iter()
+                .map(|a| (a.rank, share(a, a.cpu)))
+                .collect(),
+        ),
+    ];
+    let breakdown = table_from_csv(&data.breakdown_csv);
+    if let (Some(ranks), Some(comm), Some(comp)) = (
+        breakdown.col("rank"),
+        breakdown.col("comm_total"),
+        breakdown.col("comp_total"),
+    ) {
+        let rows: Vec<(i64, f64, f64)> = ranks
             .iter()
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
-                (lo.min(*v), hi.max(*v))
-            });
-        csv.row(&[
-            metric.to_string(),
-            rank.to_string(),
-            values.len().to_string(),
-            short(values.iter().sum::<f64>() / values.len() as f64),
-            short(lo),
-            short(hi),
-        ]);
-    }
-    csv.0
-}
-
-/// Samples averaged into fixed bins (about 100 over the capture), one
-/// column per metric. Returns the CSV and the bin width in us.
-fn pm_timeline(samples: &[PmSample], t0: f64) -> (String, f64) {
-    let (lo, hi) = samples
-        .iter()
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| {
-            (lo.min(s.ts), hi.max(s.ts))
-        });
-    let bin = nice_ceil(((hi - lo) / 100.0).max(1000.0));
-    let metrics = metric_order(samples);
-    let column: HashMap<&str, usize> = metrics.iter().enumerate().map(|(i, m)| (*m, i)).collect();
-    let mut cells: BTreeMap<(i64, i64), Vec<(f64, usize)>> = BTreeMap::new();
-    for s in samples {
-        let row = cells
-            .entry((s.rank, ((s.ts - t0) / bin).floor() as i64))
-            .or_insert_with(|| vec![(0.0, 0); metrics.len()]);
-        let cell = &mut row[column[s.metric.as_str()]];
-        cell.0 += s.value;
-        cell.1 += 1;
-    }
-    let header: Vec<&str> = ["rank", "t_ms"].into_iter().chain(metrics).collect();
-    let mut csv = Csv::new(&header);
-    for ((rank, index), row) in cells {
-        let fields: Vec<String> = [rank.to_string(), d1(index as f64 * bin / 1000.0)]
-            .into_iter()
-            .chain(row.into_iter().map(|(sum, n)| {
-                if n > 0 {
-                    short(sum / n as f64)
-                } else {
-                    String::new()
-                }
-            }))
+            .zip(comm)
+            .zip(comp)
+            .map(|((r, c), p)| (num(r) as i64, num(c), num(p)))
             .collect();
-        csv.row(&fields);
+        metrics.push((
+            "communication kernel time (us)".into(),
+            rows.iter().map(|(r, c, _)| (*r, *c)).collect(),
+        ));
+        metrics.push((
+            "compute kernel time (us)".into(),
+            rows.iter().map(|(r, _, p)| (*r, *p)).collect(),
+        ));
     }
-    (csv.0, bin)
-}
+    let mut counter_metrics: BTreeMap<String, Vec<(i64, f64)>> = BTreeMap::new();
+    for c in &diag.counters {
+        for stat in ["mean", "max"] {
+            counter_metrics
+                .entry(format!("{} {stat}", c.metric))
+                .or_default()
+                .push((c.rank, c.get(stat)));
+        }
+    }
+    metrics.extend(counter_metrics);
+    let mut outlier_docs = Vec::new();
+    let mut flagged_by_host: BTreeMap<(String, String), BTreeSet<i64>> = BTreeMap::new();
+    for (name, values) in &metrics {
+        let (median, flagged) = outliers(values);
+        for (rank, _, z) in &flagged {
+            if let Some(host) = host_of(*rank) {
+                let dir = if *z < 0.0 { "low" } else { "high" };
+                flagged_by_host
+                    .entry((format!("{name} {dir}"), host))
+                    .or_default()
+                    .insert(*rank);
+            }
+        }
+        if flagged.is_empty() {
+            continue;
+        }
+        outlier_docs.push(json!({
+            "metric": name,
+            "median": median,
+            "flagged_ranks": flagged.len(),
+            "ranks": flagged.iter().take(TOP).map(|(rank, v, z)| json!({
+                "rank": rank, "host": host_of(*rank), "value": v, "z": if z.is_finite() { json!(z) } else { json!(null) },
+            })).collect::<Vec<_>>(),
+        }));
+    }
+    let ranks_per_host: HashMap<&str, usize> = hosts.values().fold(HashMap::new(), |mut m, h| {
+        *m.entry(h.as_str()).or_default() += 1;
+        m
+    });
+    let host_docs: Vec<serde_json::Value> = flagged_by_host
+        .iter()
+        .filter(|((_, host), ranks)| ranks.len() >= 2 && 2 * ranks.len() >= ranks_per_host[host.as_str()])
+        .take(TOP)
+        .map(|((metric, host), ranks)| {
+            let ranks: Vec<i64> = ranks.iter().copied().collect();
+            json!({"host": host, "metric": metric, "ranks": rank_ranges(&ranks), "of": ranks_per_host[host.as_str()]})
+        })
+        .collect();
 
-struct ReadmeInput<'a> {
-    data: &'a RunData,
-    t0: f64,
-    groups: &'a [GroupStats],
-    activity: &'a [Activity],
-    pm_bin: Option<f64>,
-}
-
-fn readme(input: &ReadmeInput<'_>) -> String {
-    let data = input.data;
-    let mut s = String::new();
+    // Data quality.
+    let nccl: u64 = diag.activity.iter().map(|a| a.nccl_kernels).sum();
+    let nccl_bare: u64 = diag.activity.iter().map(|a| a.nccl_unannotated).sum();
+    let other_bare: u64 = diag.activity.iter().map(|a| a.other_comm_unannotated).sum();
+    let mut lost: Vec<&Activity> = diag
+        .activity
+        .iter()
+        .filter(|a| {
+            a.nccl_kernels > 0
+                && a.nccl_unannotated as f64
+                    > crate::diagnostics::ANNOTATION_LOSS_SHARE * a.nccl_kernels as f64
+        })
+        .collect();
+    lost.sort_by(|a, b| {
+        (b.nccl_unannotated as f64 / b.nccl_kernels as f64)
+            .total_cmp(&(a.nccl_unannotated as f64 / a.nccl_kernels as f64))
+    });
+    let utilization = |f: &dyn Fn(&Activity) -> f64| dist(diag.activity.iter().map(f).collect());
     let run_name = data
         .run_json
         .get("run_name")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
-    let _ = writeln!(s, "# comms_viz report: {run_name}\n");
-    let _ = writeln!(s, "- run id: `{}`", data.run_id);
-    if let Some(step) = data
-        .metadata_json
-        .as_ref()
-        .and_then(|m| m["capture"]["step"].as_i64())
-    {
-        let _ = writeln!(s, "- step: {step}");
+    json!({
+        "run": {
+            "name": run_name,
+            "run_id": data.run_id,
+            "step": data.metadata_json.as_ref().and_then(|m| m["capture"]["step"].as_i64()),
+            "ranks": data.status_json["ranks"]["processed"],
+            "hosts": ranks_per_host.len(),
+            "process_groups": groups.len(),
+        },
+        "warnings": data.warnings,
+        "data_quality": {
+            "nccl_kernels": nccl,
+            "nccl_kernels_without_pg_metadata": nccl_bare,
+            "ranks_losing_pg_metadata": lost.len(),
+            "worst_ranks_losing_pg_metadata": lost.iter().take(TOP).map(|a| json!({
+                "rank": a.rank, "host": host_of(a.rank), "unannotated": a.nccl_unannotated, "nccl_kernels": a.nccl_kernels,
+            })).collect::<Vec<_>>(),
+            "other_comm_kernels_without_pg_metadata": other_bare,
+            "unmatchable_kernels": {
+                "no_sequence": groups.iter().map(|g| g.no_seq).sum::<usize>(),
+                "p2p": groups.iter().map(|g| g.p2p).sum::<usize>(),
+            },
+            "incomplete_collectives": groups.iter().map(|g| g.incomplete).sum::<usize>(),
+        },
+        "utilization_pct": {
+            "gpu_busy": utilization(&|a| share(a, a.gpu)),
+            "compute": utilization(&|a| share(a, a.compute)),
+            "cpu_active": utilization(&|a| share(a, a.cpu)),
+            "window_us": dist(window_of.values().copied().collect()),
+        },
+        "stragglers": {
+            "suspects": straggler_count,
+            "top": straggler_docs,
+        },
+        "ranks_in_slow_groups": {
+            "count": slow_ranks.len(),
+            "top": slow_ranks.iter().take(TOP_RANKS).map(|(r, slow, n)| json!({
+                "rank": r, "host": host_of(*r), "slow_groups": slow, "groups": n,
+            })).collect::<Vec<_>>(),
+        },
+        "outliers": outlier_docs,
+        "host_outliers": host_docs,
+        "axes": axis_docs,
+    })
+}
+
+fn f(value: &serde_json::Value) -> String {
+    if value.is_null() {
+        return "-".to_string();
     }
-    let _ = writeln!(s, "- ranks: {}", data.status_json["ranks"]["processed"]);
-    for warning in &data.warnings {
-        let _ = writeln!(s, "- warning: {warning}");
+    match value.as_f64() {
+        Some(v) if v.abs() >= 100.0 => format!("{v:.0}"),
+        Some(v) => d1(v),
+        None => value
+            .as_str()
+            .map_or_else(|| value.to_string(), str::to_string),
+    }
+}
+
+fn readme(s: &serde_json::Value) -> String {
+    let mut out = String::new();
+    let run = &s["run"];
+    let _ = writeln!(out, "# comms_viz summary: {}\n", f(&run["name"]));
+    let _ = writeln!(
+        out,
+        "run id `{}`, step {}, {} ranks on {} hosts, {} process groups. Times are us, \
+         bandwidth GB/s (nccl-tests busbw). Every table is a top-{TOP} or a distribution; \
+         `summary.json` has the same content.\n",
+        f(&run["run_id"]),
+        f(&run["step"]),
+        f(&run["ranks"]),
+        f(&run["hosts"]),
+        f(&run["process_groups"])
+    );
+    for w in s["warnings"].as_array().into_iter().flatten() {
+        let _ = writeln!(out, "- **warning:** {}", f(w));
+    }
+
+    let q = &s["data_quality"];
+    let _ = writeln!(out, "\n## Data quality\n");
+    let _ = writeln!(
+        out,
+        "- NCCL kernels without process-group metadata: {} of {} ({} ranks above 1%). \
+         They count as communication time but are in no group or statistic below.",
+        f(&q["nccl_kernels_without_pg_metadata"]),
+        f(&q["nccl_kernels"]),
+        f(&q["ranks_losing_pg_metadata"])
+    );
+    for r in q["worst_ranks_losing_pg_metadata"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let _ = writeln!(
+            out,
+            "  - rank {} ({}): {} of {}",
+            f(&r["rank"]),
+            f(&r["host"]),
+            f(&r["unannotated"]),
+            f(&r["nccl_kernels"])
+        );
     }
     let _ = writeln!(
-        s,
-        "\nTimes and durations are us. `t` columns are us after the first kernel or \
-         sample (trace ts {:.3}). `bytes` is the collective payload.",
-        input.t0
+        out,
+        "- Other communication kernels (HybridEP, DeepEP, ...), never annotated: {}",
+        f(&q["other_comm_kernels_without_pg_metadata"])
     );
-    let _ = write!(
-        s,
-        "\n## Files\n\n\
-         - `breakdown.csv`: per-rank time by category, non-zero categories only\n\
-         - `groups/<group>.csv`: every kernel in the group, one row per rank per \
-         collective, rows of one collective adjacent\n\
-         - `imbalance.csv`: the {IMBALANCE_ROWS} collectives with the worst start spread across \
-         their group, worst first; `first`/`last` are the first and last ranks to start, \
-         `spread_pct` is the spread over the first rank's duration\n\
-         - `arrivals.csv`: per rank and op, how often the rank started last and its \
-         arrival position\n\
-         - `utilization.csv`: per-rank GPU occupied, compute kernel and CPU active %\n\
-         - `comm_by_group.csv`: per-rank time in each group's collectives, including \
-         waiting\n"
+    let _ = writeln!(
+        out,
+        "- Kernels not matched across ranks: {} without a c10d sequence, {} p2p send/recv \
+         (sequence 0 on every call). Collectives missing a member: {}.",
+        f(&q["unmatchable_kernels"]["no_sequence"]),
+        f(&q["unmatchable_kernels"]["p2p"]),
+        f(&q["incomplete_collectives"])
     );
-    if let Some(bin) = input.pm_bin {
+
+    let u = &s["utilization_pct"];
+    let _ = writeln!(
+        out,
+        "\n## Utilization across ranks (% of each rank's GPU window)\n"
+    );
+    let _ = writeln!(
+        out,
+        "| metric | p50 | p90 | p99 | max |\n|---|---|---|---|---|"
+    );
+    for (name, key) in [
+        ("GPU busy", "gpu_busy"),
+        ("compute kernels", "compute"),
+        ("CPU active", "cpu_active"),
+        ("window (us)", "window_us"),
+    ] {
+        let d = &u[key];
+        if d.is_null() {
+            continue;
+        }
         let _ = writeln!(
-            s,
-            "- `pm_summary.csv`: GPU counter stats per metric and rank\n\
-             - `pm_timeline.csv`: GPU counters averaged over {} ms bins",
-            d1(bin / 1000.0)
+            out,
+            "| {name} | {} | {} | {} | {} |",
+            f(&d["p50"]),
+            f(&d["p90"]),
+            f(&d["p99"]),
+            f(&d["max"])
         );
     }
 
-    let _ = writeln!(s, "\n## Groups\n");
+    let st = &s["stragglers"];
+    let _ = writeln!(out, "\n## Stragglers\n");
     let _ = writeln!(
-        s,
-        "| group | ranks | kernels | matched | most often last | name |"
+        out,
+        "How often each rank starts a matched collective last, against chance (1/n per \
+         collective of n ranks), over every group. z >= {STRAGGLER_Z}: {} ranks. A straggler's \
+         peers wait for it, so ranks downstream of it can also score; the highest z is the \
+         likeliest cause.\n",
+        f(&st["suspects"])
     );
-    let _ = writeln!(s, "|---|---|---|---|---|---|");
-    for g in input.groups {
-        let last = g
-            .last_arrivals
-            .iter()
-            .take(3)
-            .map(|(rank, latest, runs)| format!("{rank} ({latest}/{runs})"))
+    let _ = writeln!(
+        out,
+        "| rank | host | last / collectives | expected | z | mean lag | last by axis |\n|---|---|---|---|---|---|---|"
+    );
+    for r in st["top"].as_array().into_iter().flatten() {
+        let by_axis = r["last_by_axis"]
+            .as_object()
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| format!("{k} {}", f(v)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let _ = writeln!(
+            out,
+            "| {} | {} | {}/{} | {} | {} | {} | {by_axis} |",
+            f(&r["rank"]),
+            f(&r["host"]),
+            f(&r["last"]),
+            f(&r["cohorts"]),
+            f(&r["expected_last"]),
+            f(&r["z"]),
+            f(&r["mean_lag_us"])
+        );
+    }
+
+    let sr = &s["ranks_in_slow_groups"];
+    let _ = writeln!(out, "\n## Ranks in slow groups\n");
+    let _ = writeln!(
+        out,
+        "A group is slow when its median busbw is under {:.0}% of its axis' median for the \
+         same collective. Ranks in slow groups at least half the time: {}. A slow node or \
+         link makes every group it is in slow.\n",
+        SLOW_GROUP_SHARE * 100.0,
+        f(&sr["count"])
+    );
+    if sr["count"].as_u64().unwrap_or(0) > 0 {
+        let _ = writeln!(out, "| rank | host | slow groups / groups |\n|---|---|---|");
+        for r in sr["top"].as_array().into_iter().flatten() {
+            let _ = writeln!(
+                out,
+                "| {} | {} | {}/{} |",
+                f(&r["rank"]),
+                f(&r["host"]),
+                f(&r["slow_groups"]),
+                f(&r["groups"])
+            );
+        }
+    }
+
+    let _ = writeln!(out, "\n## Per-rank outliers\n");
+    let _ = writeln!(
+        out,
+        "Ranks more than {OUTLIER_Z} robust z (median / MAD) and {:.0}% from the median of \
+         all ranks.\n",
+        OUTLIER_REL * 100.0
+    );
+    let outliers = s["outliers"].as_array().cloned().unwrap_or_default();
+    if outliers.is_empty() {
+        let _ = writeln!(out, "None.");
+    }
+    for o in &outliers {
+        let ranks = o["ranks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| format!("{} ({}, z {})", f(&r["rank"]), f(&r["value"]), f(&r["z"])))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(
-            s,
-            "| {} | {} | {} | {} | {last} | `{}` |",
-            g.alias,
-            rank_ranges(&g.ranks),
-            g.kernels,
-            g.complete,
-            g.stem
+            out,
+            "- {} (median {}): {} ranks; {ranks}",
+            f(&o["metric"]),
+            f(&o["median"]),
+            f(&o["flagged_ranks"])
         );
     }
-    if input.groups.iter().any(|g| !g.by_seq) {
-        s.push_str(
-            "\nGroups without c10d sequence numbers are matched by position on each rank.\n",
+    let hosts = s["host_outliers"].as_array().cloned().unwrap_or_default();
+    if !hosts.is_empty() {
+        let _ = writeln!(
+            out,
+            "\nHosts where most ranks are outliers on one metric:\n"
         );
-    }
-
-    if !input.activity.is_empty() {
-        let _ = writeln!(s, "\n## Utilization (lowest GPU occupied first)\n");
-        let _ = writeln!(s, "| rank | GPU % | compute % | CPU % |");
-        let _ = writeln!(s, "|---|---|---|---|");
-        let mut sorted: Vec<&Activity> = input.activity.iter().collect();
-        sorted.sort_by(|a, b| (a.gpu / a.window).total_cmp(&(b.gpu / b.window)));
-        for a in sorted.iter().take(TOP) {
+        for h in &hosts {
             let _ = writeln!(
-                s,
-                "| {} | {} | {} | {} |",
-                a.rank,
-                pct(a.gpu, a.window),
-                pct(a.compute, a.window),
-                pct(a.cpu, a.window)
+                out,
+                "- {}: {} (ranks {} of {})",
+                f(&h["host"]),
+                f(&h["metric"]),
+                f(&h["ranks"]),
+                f(&h["of"])
             );
         }
     }
 
-    let _ = writeln!(s, "\n## Worst start spread per group\n");
-    let _ = writeln!(
-        s,
-        "| group | step | seq | op | dur | first | last | spread % |"
-    );
-    let _ = writeln!(s, "|---|---|---|---|---|---|---|---|");
-    for g in input.groups {
-        for w in &g.worst {
+    let _ = writeln!(out, "\n## Axes\n");
+    for a in s["axes"].as_array().into_iter().flatten() {
+        let gs = &a["group_size"];
+        let _ = writeln!(
+            out,
+            "### {}\n\n{} groups of {} ranks; {} kernels, {} matched collectives, {} missing a \
+             member, {} kernels unmatchable (no sequence {}, p2p {}).\n",
+            f(&a["axis"]),
+            f(&a["groups"]),
+            if gs["min"] == gs["max"] {
+                f(&gs["min"])
+            } else {
+                format!("{}-{}", f(&gs["min"]), f(&gs["max"]))
+            },
+            f(&a["kernels"]),
+            f(&a["matched_collectives"]),
+            f(&a["incomplete_collectives"]),
+            f(&json!(
+                a["unmatchable_kernels"]["no_sequence"]
+                    .as_u64()
+                    .unwrap_or(0)
+                    + a["unmatchable_kernels"]["p2p"].as_u64().unwrap_or(0)
+            )),
+            f(&a["unmatchable_kernels"]["no_sequence"]),
+            f(&a["unmatchable_kernels"]["p2p"])
+        );
+        let sp = &a["start_spread_us"];
+        if !sp.is_null() {
             let _ = writeln!(
-                s,
-                "| {} | {} | {} | {} | {} | {} | {} | {:.0} |",
-                g.alias,
-                w.step,
-                w.seq,
-                w.collective,
-                d1(w.min_dur),
-                w.first,
-                w.last,
-                w.spread_pct
+                out,
+                "Start spread (last start - first start) over matched collectives: p50 {}, \
+                 p90 {}, p99 {}, max {}.\n",
+                f(&sp["p50"]),
+                f(&sp["p90"]),
+                f(&sp["p99"]),
+                f(&sp["max"])
             );
         }
+        if let Some(bw) = a["busbw_gbps"].as_object().filter(|m| !m.is_empty()) {
+            let _ = writeln!(
+                out,
+                "| collective | busbw p50 | p90 | max | n |\n|---|---|---|---|---|"
+            );
+            for (op, d) in bw {
+                let _ = writeln!(
+                    out,
+                    "| {op} | {} | {} | {} | {} |",
+                    f(&d["p50"]),
+                    f(&d["p90"]),
+                    f(&d["max"]),
+                    f(&d["n"])
+                );
+            }
+            out.push('\n');
+        }
+        let slow = a["slowest_groups"].as_array().cloned().unwrap_or_default();
+        if !slow.is_empty() {
+            let _ = writeln!(
+                out,
+                "Slow groups: {} (median busbw under {:.0}% of the axis median). Slowest:\n",
+                f(&a["slow_groups"]),
+                SLOW_GROUP_SHARE * 100.0
+            );
+            for g in &slow {
+                let _ = writeln!(
+                    out,
+                    "- {} (ranks {}): {} {} GB/s, {}% of axis median",
+                    f(&g["group"]),
+                    f(&g["ranks"]),
+                    f(&g["op"]),
+                    f(&g["median_busbw_gbps"]),
+                    d1(g["share_of_axis_median"].as_f64().unwrap_or(0.0) * 100.0)
+                );
+            }
+            out.push('\n');
+        }
+        let worst = a["worst_collectives"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if !worst.is_empty() {
+            let _ = writeln!(
+                out,
+                "Worst start spread:\n\n| group | step | seq | op | spread | min dur | first | last |\n|---|---|---|---|---|---|---|---|"
+            );
+            for w in &worst {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} | {} | {} | {} | {} | {} |",
+                    f(&w["group"]),
+                    f(&w["step"]),
+                    f(&w["seq"]),
+                    f(&w["op"]),
+                    f(&w["spread_us"]),
+                    f(&w["min_dur_us"]),
+                    f(&w["first_rank"]),
+                    f(&w["last_rank"])
+                );
+            }
+            out.push('\n');
+        }
+        let high = a["highest_median_spread_groups"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if !high.is_empty() {
+            let line = high
+                .iter()
+                .map(|g| format!("{} ({})", f(&g["group"]), f(&g["median_spread_us"])))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(out, "Highest median start spread: {line}\n");
+        }
     }
-    s
+    out
 }
 
 #[cfg(test)]
@@ -1043,7 +1337,6 @@ mod tests {
             rank,
             ts,
             dur: 10.0,
-            name: "ncclAllReduce".into(),
             original_name: "ncclAllReduce".into(),
             sequence: Some(seq.into()),
             pg: "0".into(),
@@ -1053,6 +1346,11 @@ mod tests {
             out_n: 4.0,
             group_size: 2,
             step: Some(1),
+            p2p: false,
+            operation: String::new(),
+            peer: String::new(),
+            replay: String::new(),
+            comm_kernel: true,
         }
     }
 
@@ -1075,6 +1373,10 @@ mod tests {
         let even = [(8.0, 8.0); 4];
         assert_eq!(of("allreduce", &even), (true, Some(1.5)));
         assert_eq!(of("_allgather_base", &[(2.0, 8.0); 4]), (true, Some(0.75)));
+        assert_eq!(
+            of("allGatherSingleImpl", &[(2.0, 8.0); 4]),
+            (true, Some(0.75))
+        );
         assert_eq!(of("reduce_scatter", &[(8.0, 2.0); 4]), (true, Some(0.75)));
         assert_eq!(of("all_to_all", &even), (true, Some(0.75)));
         // Uneven splits: ranks move different amounts, so no bandwidth at all.
@@ -1089,8 +1391,7 @@ mod tests {
     fn cohorts_match_on_sequence_not_ordinal() {
         // Rank 1 is missing seq 1, so ordinal matching would pair 1 with 2.
         let events = vec![event(0, 0.0, "1"), event(0, 20.0, "2"), event(1, 25.0, "2")];
-        let (list, by_seq) = cohorts(&events);
-        assert!(by_seq);
+        let list = cohorts(&events);
         let complete: Vec<_> = list
             .iter()
             .filter(|c| cohort_complete(c, &events))
@@ -1102,10 +1403,80 @@ mod tests {
     }
 
     #[test]
-    fn parses_quoted_csv() {
-        let table = table_from_csv("name,rank\n\"void k<a, b>\",3\n");
-        assert_eq!(table.col("name").unwrap(), ["void k<a, b>"]);
-        assert_eq!(table.col("rank").unwrap(), ["3"]);
+    fn copies_of_one_call_merge_into_one_instance() {
+        // A copy-engine all-gather: two copies of one call, then the next call.
+        let copy = |ts| Event {
+            comm_kernel: false,
+            ..event(0, ts, "7")
+        };
+        let calls = instances(&[copy(0.0), copy(5.0), event(0, 30.0, "8")]);
+        assert_eq!(calls.len(), 2);
+        assert_eq!((calls[0].ts, calls[0].dur), (0.0, 15.0));
+        assert_eq!(calls[1].sequence.as_deref(), Some("8"));
+    }
+
+    #[test]
+    fn unsequenced_and_p2p_calls_join_no_cohort() {
+        let p2p = |rank, ts| Event {
+            p2p: true,
+            collective: "send".into(),
+            ..event(rank, ts, "0")
+        };
+        let bare = |rank, ts| Event {
+            sequence: None,
+            ..event(rank, ts, "")
+        };
+        let events = vec![p2p(0, 0.0), p2p(1, 5.0), bare(0, 10.0), bare(1, 12.0)];
+        assert!(cohorts(&events).is_empty());
+        let g = summarize_group(0, "pp_p2p_x", "pp_p2p", &events);
+        assert_eq!((g.complete, g.p2p, g.no_seq), (0, 2, 2));
+        assert!(g.arrivals.is_empty());
+    }
+
+    #[test]
+    fn straggler_score_counts_last_arrivals_against_chance() {
+        // Rank 1 starts last in all 10 two-rank collectives.
+        let events: Vec<Event> = (0..10)
+            .flat_map(|s| {
+                let seq = s.to_string();
+                [
+                    event(0, s as f64 * 100.0, &seq),
+                    event(1, s as f64 * 100.0 + 30.0, &seq),
+                ]
+            })
+            .collect();
+        let g = summarize_group(0, "tp_x", "tp", &events);
+        let a: HashMap<i64, Arrivals> = g.arrivals.into_iter().collect();
+        assert_eq!((a[&1].last, a[&1].cohorts), (10, 10));
+        assert_eq!(a[&1].expected, 5.0);
+        assert!(a[&1].z() > 3.0 && a[&0].z() < -3.0);
+        assert_eq!(g.spreads, vec![30.0; 10]);
+    }
+
+    #[test]
+    fn outliers_need_both_robust_z_and_relative_distance() {
+        let mut values: Vec<(i64, f64)> =
+            (0..20).map(|r| (r, 70.0 + (r % 3) as f64 * 0.1)).collect();
+        values.push((20, 35.0));
+        let (median, flagged) = outliers(&values);
+        assert!((median - 70.1).abs() < 1e-9);
+        assert_eq!(flagged.iter().map(|o| o.0).collect::<Vec<_>>(), [20]);
+        // Tiny MAD alone does not flag a rank 0.3% off the median.
+        values.pop();
+        values.push((20, 70.3));
+        assert!(outliers(&values).1.is_empty());
+    }
+
+    #[test]
+    fn axis_is_the_longest_matching_prefix() {
+        let axes = vec![
+            "pp".to_string(),
+            "pp_p2p_round_0".to_string(),
+            "tp".to_string(),
+        ];
+        assert_eq!(axis_of(&format!("pp_{}", "a".repeat(40)), &axes), "pp");
+        assert_eq!(axis_of("pp_p2p_round_0_abc-r4", &axes), "pp_p2p_round_0");
+        assert_eq!(axis_of("ep_abc", &axes), "other");
     }
 
     #[test]
@@ -1132,17 +1503,10 @@ mod tests {
     }
 
     #[test]
-    fn rounds_bins_up_to_nice_widths() {
-        assert_eq!(nice_ceil(1000.0), 1000.0);
-        assert_eq!(nice_ceil(1300.0), 2000.0);
-        assert_eq!(nice_ceil(6000.0), 10000.0);
-    }
-
-    #[test]
-    fn union_merges_overlaps() {
-        assert_eq!(
-            union_duration(vec![(0.0, 10.0), (5.0, 15.0), (20.0, 25.0)]),
-            20.0
-        );
+    fn hosts_come_from_rank_map_runs() {
+        let doc = r#"{"hosts":["a","b"],"runs":[[0,2,0,-1],[2,2,1,-1]],"v":1}"#;
+        let hosts = rank_hosts(Some(doc));
+        assert_eq!(hosts[&1], "a");
+        assert_eq!(hosts[&3], "b");
     }
 }

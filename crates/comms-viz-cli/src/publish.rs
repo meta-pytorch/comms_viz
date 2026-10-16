@@ -223,6 +223,11 @@ fn load_run_data(tree: &ValidatedTree) -> Result<RunData> {
         .ok()
         .map(|p| format!("{}/", p.display()));
 
+    let mut warnings = tree.warnings.clone();
+    warnings.extend(crate::diagnostics::annotation_warnings(
+        &crate::diagnostics::read(&per_pg_all)?,
+    ));
+
     Ok(RunData {
         run_id: tree.run_id.clone(),
         run_json,
@@ -235,7 +240,7 @@ fn load_run_data(tree: &ValidatedTree) -> Result<RunData> {
         per_pg_all,
         rank_map_json,
         repaired_traces_dir,
-        warnings: tree.warnings.clone(),
+        warnings,
     })
 }
 
