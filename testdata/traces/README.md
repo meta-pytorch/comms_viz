@@ -41,3 +41,27 @@ python3 gen_synthetic_traces.py cgp    --ranks 4 --mode cgp
   `.pftrace` parser.
 
 If you regenerate these traces, also regenerate the `.pftrace` copies.
+
+## DeviceMesh-shaped traces with known faults
+
+`gen_mesh_traces.py` writes traces meant to be analyzed for meaning: every
+rank lists only its own process groups, collectives carry sequence numbers
+and names that agree across a group, and timing comes from a lockstep
+simulation in which a collective ends after its last member arrives. Faults
+can be injected and are recorded in `ground_truth.json`.
+
+```sh
+python3 gen_mesh_traces.py OUT_DIR --mesh pp=4,dp_replicate=24,dp_shard=64,cp=2,tp=4 --ep 32 \
+    [--straggler RANK:FACTOR] [--slow-node NODE:FACTOR] [--slow-pp-link RANK:FACTOR] \
+    [--strip-annotations RANK:FRACTION] [--custom-kernels] [--counters] [--workers N]
+```
+
+`--kernels-per-compute` sets the trace size: 100 gives about 90k events
+(2 MB gzipped) per rank, close to a real step. `mesh/` is the fixture of
+`tests/integration/semantics.rs`:
+
+```sh
+python3 gen_mesh_traces.py mesh --mesh pp=4,dp_shard=2,tp=2 --ep 2 --layers 2 --microbatches 2 \
+    --kernels-per-compute 3 --straggler 5:1.3 --slow-node 3:2.0 --slow-pp-link 1:3.0 \
+    --strip-annotations 2:0.5 --custom-kernels --counters --workers 1
+```

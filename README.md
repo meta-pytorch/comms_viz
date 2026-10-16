@@ -15,8 +15,8 @@ type and process group:
 
 The **Parallelism** tab shows one process group at a time (e.g. one TP or
 FSDP group), with each rank's comm kernels side by side on a shared timeline,
-alongside per-rank utilization and GPU counters (SM activity, DRAM and NVLink
-bandwidth) when the traces carry them.
+alongside per-rank utilization and GPU counter stats (SM activity, DRAM and
+NVLink bandwidth) when the traces carry them.
 
 It also shows a per-collective breakdown of rank arrival time skew and imbalance, and a per-rank breakdown
 of time spent in compute, collectives, and active GPU / CPU time:
@@ -40,7 +40,7 @@ files to `./analysis/report/` and the structured report to
 | `--trace-root DIR` | One step's traces, one file per rank, all in this directory. File names: see `--trace-format`. Omit the flag to rebuild the reports from an existing `--out` without re-analyzing. |
 | `--out DIR` | Where analysis results and, by default, both reports are written. Required. |
 | `--report DIR` | Where the HTML report is written. Default `<out>/report`. |
-| `--structured-report DIR` | Where the analysis is written as a Markdown summary and CSV tables, for scripts or LLMs. Default `<out>/structured_report`. |
+| `--structured-report DIR` | Where the analysis is written as a summary for scripts or LLM agents (`README.md` and `summary.json`), whose size does not grow with world size. Default `<out>/structured_report`. |
 | `--run-id ID` | Name of the run's subdirectory under `<out>/tree/`, also used in the report file names. Default `local-run`, or `local-run-2`, `-3`, ... if taken. An explicit id that is taken is an error. |
 | `--overwrite` | Replace an existing run with the same id. |
 | `--run-name NAME` | Run name shown in the report. |
@@ -70,14 +70,19 @@ For Kineto backend, ensure your framework exports the trace with
 `export_chrome_trace(path, cuda_graph_annotations=get_kernel_annotations())`.
 
 Frameworks like TorchTitan already do both steps, but without them, collective
-kernels aren't properly recognized and attributed to PGs by comms_viz.
+kernels aren't properly recognized and attributed to PGs by comms_viz. When
+NCCL kernels lack process-group metadata, comms_viz warns and names the
+affected ranks.
 
 ## Collectives across ranks
 
 Collectives are matched across ranks by the c10d metadata (process group,
 collective, sequence number) that PyTorch's profiler attaches to their GPU
 events, and the several events of one call, e.g. a copy-engine collective's
-copies, are grouped into a single call. Observed bandwidth is the full payload
+copies, are grouped into a single call. Calls without a sequence number and
+p2p send/recv (whose sequence is always 0) are not matched: only their order
+would pair them, so they appear on the timeline but in no cross-rank
+statistic. Observed bandwidth is the full payload
 (nccl-tests' algbw) over the shortest call duration across ranks, since every
 rank's duration includes waiting for the others.
 
