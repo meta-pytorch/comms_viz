@@ -105,8 +105,6 @@ pub(crate) struct Activity {
     /// Kernels on a process group, and those with a c10d sequence number.
     pub group_kernels: u64,
     pub sequenced_kernels: u64,
-    /// NCCL kernels without process-group metadata that are CUDA-graph replays.
-    pub nccl_unannotated_graph: u64,
 }
 
 impl Activity {
@@ -180,7 +178,6 @@ fn from_path(path: &Path) -> Result<Diagnostics> {
                 nccl_unannotated_us: num(get("nccl_unannotated_us", row)),
                 group_kernels: num(get("group_kernels", row)) as u64,
                 sequenced_kernels: num(get("sequenced_kernels", row)) as u64,
-                nccl_unannotated_graph: num(get("nccl_unannotated_graph", row)) as u64,
                 steps: match (get("step_min", row), get("step_max", row)) {
                     ("", _) | (_, "") => None,
                     (lo, hi) => Some((num(lo) as i64, num(hi) as i64)).filter(|s| s.0 >= 0),
@@ -264,28 +261,6 @@ pub(crate) fn annotation_warnings(diag: &Diagnostics) -> Vec<String> {
          Limitations.",
         flagged.len(),
         diag.activity.len(),
-        ranks_short(&ranks, 20)
-    )]
-}
-
-/// Ranks whose NCCL kernels without process-group metadata are CUDA-graph
-/// replays: the graph was captured without annotations, or they weren't
-/// exported with the trace.
-pub(crate) fn graph_annotation_warnings(diag: &Diagnostics) -> Vec<String> {
-    let flagged: Vec<&Activity> = diag
-        .activity
-        .iter()
-        .filter(|a| a.nccl_unannotated_graph > 0)
-        .collect();
-    if flagged.is_empty() {
-        return Vec::new();
-    }
-    let ranks: Vec<i64> = flagged.iter().map(|a| a.rank).collect();
-    let kernels: u64 = flagged.iter().map(|a| a.nccl_unannotated_graph).sum();
-    vec![format!(
-        "{kernels} NCCL kernels without process-group metadata are CUDA-graph replays (ranks \
-         {}): capture with torch.cuda.graph(..., enable_annotations=True) and export the trace \
-         with its annotations (README, CUDA graphs).",
         ranks_short(&ranks, 20)
     )]
 }
@@ -381,7 +356,6 @@ mod tests {
             steps,
             group_kernels: 0,
             sequenced_kernels: 0,
-            nccl_unannotated_graph: 0,
         };
         let diag = |activity| Diagnostics {
             activity,
@@ -420,7 +394,6 @@ mod tests {
             steps: None,
             group_kernels: 0,
             sequenced_kernels: 0,
-            nccl_unannotated_graph: 0,
         };
         let diag = Diagnostics {
             activity: vec![

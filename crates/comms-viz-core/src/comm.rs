@@ -72,10 +72,15 @@ impl CommMetadata {
             .get(7)
             .and_then(|s| s.parse::<u64>().ok())
             .filter(|n| *n != 0);
-        let graph = self.get(6).map(str::to_owned).or_else(|| {
-            node.filter(|n| *n >> 32 != 0)
-                .map(|n| (n >> 32).to_string())
-        });
+        // Kineto writes `graph id: 0` on kernels not launched from a graph.
+        let graph = self
+            .get(6)
+            .filter(|s| *s != "0")
+            .map(str::to_owned)
+            .or_else(|| {
+                node.filter(|n| *n >> 32 != 0)
+                    .map(|n| (n >> 32).to_string())
+            });
         (graph, node.map(|n| (n & 0xffff_ffff).to_string()))
     }
     pub fn ranks(&self) -> Option<Vec<i64>> {
@@ -117,6 +122,21 @@ mod tests {
                 "Collective name":operation,"Process Group Description":"PP", "Process Group Name":"0007",
                 "Process Group Ranks":[959,1023], "peer":peer,"msg nelems":8192,"dtype":"BFloat16",
                 "Seq":"00042","graph node id":(5_u64<<32)|node}})
+    }
+
+    #[test]
+    fn graph_id_zero_is_not_a_graph() {
+        let ids = |graph: &str, node: &str| {
+            let mut m = CommMetadata::default();
+            m.0[6] = Some(graph.into());
+            m.0[7] = Some(node.into());
+            m.graph_ids()
+        };
+        assert_eq!(ids("0", "0"), (None, None));
+        assert_eq!(
+            ids("3", &((3_u64 << 32) | 9).to_string()),
+            (Some("3".into()), Some("9".into()))
+        );
     }
 
     fn pp_group() -> [trace::ProcessGroupConfig; 1] {
