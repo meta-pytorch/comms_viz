@@ -1231,6 +1231,8 @@ function infoMark(info) {
 function infoTh(label, info, attrs = {}) {
   return el("th", attrs, label, infoMark(info));
 }
+document.querySelector("#pl-activity-control label")
+  .append(infoMark("Measured between each rank's first and last GPU events"));
 // w/s zoom (1.5x in / 0.67x out around the view center) and a/d pan (20% of
 // the visible span) on the active tab's chart.
 const keyNav = {}; // tab id -> { dom, set, min? } (min: pan/zoom left stop)
@@ -2234,8 +2236,9 @@ const pl = {
     };
     const head = el("tr", {}, el("th", {}, "Rank"), el("th", { style: "text-align:left" }, "Collective"),
       infoTh("Last arrivals", "Times this rank started last / times it ran this collective"),
-      infoTh("Arrival position (p50 / p90)", "This rank's place in the start order " +
-        "(1 = started first), as percentiles over its runs of this collective"));
+      infoTh("Arrival position (p50 / p90)", "p50 and p90 of this rank's place in the arrival " +
+        "order (1 = started first) among its group's ranks, over its matched runs of this " +
+        "collective, across all groups it runs it on"));
     const rows = [...stats.values()].sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name))
       .map((s) => el("tr", {}, el("td", {}, String(s.rank)), el("td", { class: "txt mono" }, s.name),
         el("td", {}, `${s.latest} / ${s.eligible}`),
@@ -2267,13 +2270,12 @@ const pl = {
       comm.set(rank, total);
     }
     const pct = (v, window) => window > 0 ? `${(100 * v / window).toFixed(1)}%` : "—";
-    const win = "\n(between this rank's first and last GPU event)";
     const head = el("tr", {}, el("th", {}, "Rank"),
-      infoTh("GPU occupied", "% of time any kernel, memcpy or memset is running" + win),
-      infoTh("Compute kernels", "% of time a non-NCCL, non-memcpy kernel is running" + win),
+      infoTh("GPU occupied", "% of time any kernel, memcpy or memset is running"),
+      infoTh("Compute kernels", "% of time a non-NCCL, non-memcpy kernel is running"),
       infoTh("Selected-PG comm", "% of time a collective of the selected group is running, " +
-        "including waiting" + win),
-      infoTh("CPU active", "% of time any CPU thread is in a PyTorch op or CUDA API call" + win));
+        "including waiting"),
+      infoTh("CPU active", "% of time any CPU thread is in a PyTorch op or CUDA API call"));
     const rows = activity.sort((a, b) => a.rank - b.rank)
       .map((r) => el("tr", {}, el("td", {}, String(r.rank)), el("td", {}, pct(r.gpu, r.window)),
         el("td", {}, pct(r.compute, r.window)), el("td", {}, pct(comm.get(r.rank) || 0, r.window)),
