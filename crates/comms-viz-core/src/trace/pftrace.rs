@@ -122,7 +122,9 @@ const IGCD_DESCRIPTOR: u64 = 2;
 const IGCD_GPU_ID: u64 = 3;
 
 // --- GpuRenderStageEvent (+ exporter extensions). ---
-const RS_EVENT_ID: u64 = 1; // == correlation id
+// The correlation id in older exporters; newer ones number events here and
+// carry CUPTI's correlation as a `correlation` extra.
+const RS_EVENT_ID: u64 = 1;
 const RS_DURATION: u64 = 2; // ns
 const RS_EXTRA_DATA: u64 = 6; // {name=1, value=2}
 const RS_GPU_ID: u64 = 11;
@@ -918,7 +920,9 @@ fn decode_track_event(
     let mut name: u32 = NO_NAME;
     let mut cat_name: u32 = NO_NAME;
     let mut track_uuid: u64 = 0;
-    let mut corr: i64 = -1;
+    // The `correlation` annotation (CUPTI's id) wins over the ext-3000 id,
+    // matching the GPU side's preference for its `correlation` extra.
+    let (mut corr, mut ext_corr): (i64, i64) = (-1, -1);
     // nccl cpu_ops carry the PG metadata as debug annotations on the BEGIN.
     let (mut pg_desc, mut pg_name) = (NO_NAME, NO_NAME);
     let (mut dtype, mut coll) = (NO_NAME, NO_NAME);
@@ -947,7 +951,7 @@ fn decode_track_event(
                 let mut es = Fields::new(eb);
                 while let Some((f2, v2)) = es.next_field()? {
                     if let (1, Val::Varint(x)) = (f2, v2) {
-                        corr = x as i64;
+                        ext_corr = x as i64;
                     }
                 }
             }
@@ -1014,7 +1018,7 @@ fn decode_track_event(
             is_end: ty == TE_TYPE_END,
             name,
             cat_name,
-            correlation: corr,
+            correlation: if corr != -1 { corr } else { ext_corr },
             pg_desc,
             pg_name,
             dtype,
@@ -1204,9 +1208,10 @@ fn decode_render_stage(
                 (combine_gnid(gid, gnid) as u64).to_string(),
             );
         }
-        // The event id, when present, is the correlation (as on PfEvent below).
-        // CUPTI correlation ids start at 1; exporters write 0 when there is none.
-        let correlation = if event_id != -1 { event_id } else { corr };
+        // The `correlation` extra (CUPTI's id) when present, else the event id
+        // (as on PfEvent below). CUPTI correlation ids start at 1; exporters
+        // write 0 when there is none.
+        let correlation = if corr > 0 { corr } else { event_id };
         if correlation > 0 {
             comm.set("correlation", correlation.to_string());
         }
@@ -1224,7 +1229,7 @@ fn decode_render_stage(
         gpu_id,
         grid0,
         gnid: combine_gnid(gid, gnid),
-        correlation: if event_id != -1 { event_id } else { corr },
+        correlation: if corr > 0 { corr } else { event_id },
         pg_desc,
         pg_name,
         dtype,
@@ -1493,6 +1498,65 @@ mod tests {
         assert_eq!(gids, vec![5]);
 
         assert_eq!(tr.process.as_ref().map(|(p, _)| *p), Some(42));
+    }
+
+    /// Newer exporters number GPU events (event id, ext 3000) separately from
+    /// CUPTI's correlation (the `correlation` extra and annotation); the
+    /// launch and its kernel must still get the same correlation.
+    #[test]
+    fn correlation_prefers_cupti_id_over_event_id() {
+        let mut trace = build_fixture();
+        let mut ann = Vec::new();
+        field_str(&mut ann, DA_NAME, "correlation");
+        field_varint(&mut ann, DA_INT, 77);
+        let mut ext = Vec::new();
+        field_varint(&mut ext, 1, 3);
+        let mut te = Vec::new();
+        field_varint(&mut te, TE_TYPE, TE_TYPE_BEGIN);
+        field_varint(&mut te, TE_NAME_IID, 7);
+        field_varint(&mut te, TE_TRACK_UUID, 2);
+        field_bytes(&mut te, TE_EXT_CORRELATION, &ext);
+        field_bytes(&mut te, TE_DEBUG_ANN, &ann);
+        let mut pkt = Vec::new();
+        field_varint(&mut pkt, TP_TIMESTAMP, 3000);
+        field_varint(&mut pkt, TP_SEQ_ID, 1);
+        field_bytes(&mut pkt, TP_TRACK_EVENT, &te);
+        packet(&mut trace, &pkt);
+        let mut te = Vec::new();
+        field_varint(&mut te, TE_TYPE, TE_TYPE_END);
+        field_varint(&mut te, TE_TRACK_UUID, 2);
+        let mut pkt = Vec::new();
+        field_varint(&mut pkt, TP_TIMESTAMP, 3100);
+        field_varint(&mut pkt, TP_SEQ_ID, 1);
+        field_bytes(&mut pkt, TP_TRACK_EVENT, &te);
+        packet(&mut trace, &pkt);
+        let mut rs = Vec::new();
+        field_varint(&mut rs, RS_EVENT_ID, 3);
+        field_varint(&mut rs, RS_DURATION, 50);
+        field_varint(&mut rs, RS_HW_QUEUE_IID, 100);
+        field_varint(&mut rs, RS_STAGE_IID, 1);
+        field_varint(&mut rs, RS_EXT_KERNEL_NAME_IID, 9);
+        let mut ex = Vec::new();
+        field_str(&mut ex, 1, "correlation");
+        field_str(&mut ex, 2, "77");
+        field_bytes(&mut rs, RS_EXTRA_DATA, &ex);
+        let mut pkt = Vec::new();
+        field_varint(&mut pkt, TP_TIMESTAMP, 3200);
+        field_varint(&mut pkt, TP_SEQ_ID, 1);
+        field_bytes(&mut pkt, TP_GPU_RENDER_STAGE, &rs);
+        packet(&mut trace, &pkt);
+
+        let tr = read_trace(&trace).unwrap();
+        let launch = tr
+            .events
+            .iter()
+            .find(|e| e.cat == PfCat::CpuSlice && e.ts_ns == 3000);
+        let kernel = tr
+            .events
+            .iter()
+            .find(|e| e.cat == PfCat::Kernel && e.ts_ns == 3200);
+        assert_eq!(launch.map(|e| e.correlation), Some(77));
+        assert_eq!(kernel.map(|e| e.correlation), Some(77));
     }
 
     #[test]
