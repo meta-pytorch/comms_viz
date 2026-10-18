@@ -28,7 +28,11 @@ pub struct RunData {
     pub rank_map_json: Option<String>,
     /// Where `--write-repaired-traces` wrote the run's traces, if it did.
     pub repaired_traces_dir: Option<String>,
+    /// Shown on the page and in the structured report, and printed.
     pub warnings: Vec<String>,
+    /// Printed only: NCCL kernels without process-group metadata, whose
+    /// share the structured report already gives as data quality.
+    pub stderr_warnings: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -230,7 +234,7 @@ fn load_run_data(tree: &ValidatedTree) -> Result<RunData> {
         &diagnostics,
     ));
     warnings.extend(crate::diagnostics::step_warnings(&diagnostics));
-    warnings.extend(crate::diagnostics::annotation_warnings(&diagnostics));
+    let stderr_warnings = crate::diagnostics::annotation_warnings(&diagnostics);
 
     Ok(RunData {
         run_id: tree.run_id.clone(),
@@ -245,6 +249,7 @@ fn load_run_data(tree: &ValidatedTree) -> Result<RunData> {
         rank_map_json,
         repaired_traces_dir,
         warnings,
+        stderr_warnings,
     })
 }
 
@@ -396,7 +401,7 @@ pub fn render_local(out_dir: &Path, run_id: Option<&str>, targets: Targets<'_>) 
 }
 
 fn render_page(data: &RunData, stem: &str, targets: Targets<'_>) -> Result<()> {
-    for warning in &data.warnings {
+    for warning in data.warnings.iter().chain(&data.stderr_warnings) {
         eprintln!("comms_viz: warning: {warning}");
     }
     if let Some(structured) = targets.structured {

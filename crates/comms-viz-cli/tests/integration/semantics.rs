@@ -189,7 +189,12 @@ fn summary_finds_the_injected_faults() {
     assert!(
         stderr.contains("warning: 1 of 16 ranks have NCCL kernels without process-group metadata")
     );
-    assert!(s["warnings"][0].as_str().unwrap().contains("ranks 2)"));
+    // Printed only: the summary gives the same facts as data quality.
+    assert!(!s["warnings"].as_array().unwrap().iter().any(|w| {
+        w.as_str()
+            .unwrap()
+            .contains("without process-group metadata")
+    }));
     // The unannotated HybridEP-style kernels are on no group.
     assert!(
         !s["axes"]

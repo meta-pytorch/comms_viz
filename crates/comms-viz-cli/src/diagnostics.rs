@@ -258,7 +258,7 @@ pub(crate) fn annotation_warnings(diag: &Diagnostics) -> Vec<String> {
         "{} of {} ranks have NCCL kernels without process-group metadata ({share:.0}% of \
          their NCCL kernel time, {bare} of {total} kernels; ranks {}): counted as \
          communication, but on no group timeline and in no cross-rank statistic. See README, \
-         Limitations.",
+         Collective annotations.",
         flagged.len(),
         diag.activity.len(),
         ranks_short(&ranks, 20)
