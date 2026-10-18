@@ -105,12 +105,11 @@ appears in a group's timeline only if it carries the process-group metadata.
   kernel and memcpy time, union of compute kernel time, and CPU time in ops
   and CUDA calls.
 - **GPU counters.** When the trace has counters (SM activity, DRAM and NVLink
-  bandwidth, ...): a heatmap with one row per rank, each rank's samples cut
-  into 64 time bins on the timeline's axis and colored by one chosen
-  statistic of the bin (min, p1, p50, p99 or max), and a table of each
-  rank's min, p10, p50, mean, p90, p99, max and std over the capture. The
-  samples themselves are not kept: at fleet scale they would outweigh every
-  other table.
+  bandwidth, ...): one track per rank on the timeline's full time range,
+  each rank's samples cut into 64 time bins drawn as the bin's min, p50 and
+  max on one scale for all shown ranks. Clicking a bin sorts the ranks by
+  its max, then its min. The samples themselves are not kept: at fleet
+  scale they would outweigh every other table.
 
 ## Outputs
 

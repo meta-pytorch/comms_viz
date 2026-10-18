@@ -16,8 +16,8 @@ type and process group:
 The **Parallelism** tab shows one process group at a time (e.g. one TP or
 FSDP group), with each rank's comm kernels side by side on a shared timeline,
 alongside per-rank utilization and, when the traces carry GPU counters (SM
-activity, DRAM and NVLink bandwidth), a per-rank counter heatmap over time and
-per-rank counter statistics.
+activity, DRAM and NVLink bandwidth), a per-rank track of each counter over
+time.
 
 It also shows a per-collective breakdown of rank arrival time skew and imbalance, and a per-rank breakdown
 of time spent in compute, collectives, and active GPU / CPU time:
