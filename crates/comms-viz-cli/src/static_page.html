@@ -1867,10 +1867,20 @@ const pl = {
           pm.push(row);
         } else {
           activity.push({ rank, gpu: +get(col.gpu_busy, r), compute: +get(col.compute, r),
-            cpu: +get(col.cpu_active, r), window: +get(col.window, r) });
+            cpu: +get(col.cpu_active, r), window: +get(col.window, r),
+            gpuStart: col.gpu_start == null ? null : +get(col.gpu_start, r),
+            gpuEnd: col.gpu_end == null ? null : +get(col.gpu_end, r) });
         }
       }
-      this.diagnostics = { activity, pm };
+      // First to last GPU event over all analyzed ranks: every group's timeline axis.
+      let gpuSpan = null;
+      for (const a of activity) {
+        if (a.gpuStart == null || !(a.window > 0)) continue;
+        gpuSpan = gpuSpan ? [Math.min(gpuSpan[0], a.gpuStart), Math.max(gpuSpan[1], a.gpuEnd)]
+          : [a.gpuStart, a.gpuEnd];
+      }
+      this.diagnostics = { activity, pm, gpuSpan };
+      if (this.events) { this.setAxis(); this.domain = null; this.draw(); }
       const metrics = [...new Set(pm.map((r) => r.metric))].sort();
       this.pmMetric = ["SM Active (%)", ...metrics].find((m) => metrics.includes(m)) ?? null;
       const box = document.getElementById("pl-pm-metrics");
@@ -1925,13 +1935,7 @@ const pl = {
     this.events = all.filter((e) => showFlash || !e.flash);
     this._cohorts = null;
     this._hoverKey = null;
-    this.minT = Infinity; this.maxT = -Infinity;
-    for (const e of this.events) {
-      if (e.ts < this.minT) this.minT = e.ts;
-      if (e.ts + e.dur > this.maxT) this.maxT = e.ts + e.dur;
-    }
-    if (!this.events.length) { this.minT = 0; this.maxT = 1; }
-    document.getElementById("pl-t0").textContent = loc(this.minT) + " μs";
+    this.setAxis();
     const steps = [...new Set(this.events.map((e) => e.step).filter((x) => x != null))].sort((a, b) => a - b);
     // Per-step pages name the step in the header; ProfilerStep#N is 0-based there.
     document.getElementById("pl-steps-row").style.display = steps.length ? "" : "none";
@@ -1981,6 +1985,21 @@ const pl = {
     this.draw();
     if (document.getElementById("pl-imb-toggle").checked) this.renderImbalance();
     this.renderDiagnostics();
+  },
+  // The axis runs from the analyzed ranks' first to last GPU event, the same for
+  // every group; the group's own events widen it if they fall outside, and set
+  // it alone until the diagnostics have loaded.
+  setAxis() {
+    let lo = Infinity, hi = -Infinity;
+    for (const e of this.events) {
+      if (e.ts < lo) lo = e.ts;
+      if (e.ts + e.dur > hi) hi = e.ts + e.dur;
+    }
+    const span = this.diagnostics && this.diagnostics.gpuSpan;
+    if (span) { lo = Math.min(lo, span[0]); hi = Math.max(hi, span[1]); }
+    if (lo === Infinity) { lo = 0; hi = 1; }
+    this.minT = lo; this.maxT = hi;
+    document.getElementById("pl-t0").textContent = loc(this.minT) + " μs";
   },
   dom() { return this.domain || [0, this.maxT - this.minT || 1]; },
   rowGeom() {

@@ -17,7 +17,7 @@ tree/local-run/_meta/status.json  681B  sha256:f0f50946ba4e8975
 tree/local-run/_staging/_combined/worker_0/breakdown.parquet  13664B  sha256:2c31e212e7d03450
 tree/local-run/_staging/_combined/worker_0/per_pg/cp_3.parquet  9991B  sha256:ab876c47ede4487f
 tree/local-run/_staging/_combined/worker_0/per_pg/default_pg_0.parquet  9955B  sha256:c855057e8f4de9ab
-tree/local-run/_staging/_combined/worker_0/per_pg/diagnostics_0.parquet  8306B  sha256:b7ba07d8e442431c
+tree/local-run/_staging/_combined/worker_0/per_pg/diagnostics_0.parquet  8934B  sha256:8f23389987d28ca0
 tree/local-run/_staging/_combined/worker_0/per_pg/dp_replicate_5.parquet  10103B  sha256:1bd70a3913922fb4
 tree/local-run/_staging/_combined/worker_0/per_pg/dp_shard_1.parquet  10075B  sha256:b933b9cde51f9c64
 tree/local-run/_staging/_combined/worker_0/per_pg/ep_4.parquet  9931B  sha256:5dc2ef3d74e735cc
@@ -26,7 +26,7 @@ tree/local-run/_staging/_combined/worker_0/rank_clocks.json  10B  sha256:e404785
 tree/local-run/_staging/_combined/worker_1/breakdown.parquet  13664B  sha256:394cb17ece3cb16d
 tree/local-run/_staging/_combined/worker_1/per_pg/cp_3.parquet  9995B  sha256:e3c1868c8f2dee7f
 tree/local-run/_staging/_combined/worker_1/per_pg/default_pg_0.parquet  9951B  sha256:7c0391f258bcef57
-tree/local-run/_staging/_combined/worker_1/per_pg/diagnostics_0.parquet  8306B  sha256:41fff98f54243973
+tree/local-run/_staging/_combined/worker_1/per_pg/diagnostics_0.parquet  8934B  sha256:34231a09f929efe8
 tree/local-run/_staging/_combined/worker_1/per_pg/dp_replicate_5.parquet  10105B  sha256:85b29b3647f95fb5
 tree/local-run/_staging/_combined/worker_1/per_pg/dp_shard_1.parquet  10075B  sha256:c6fa983f9380355a
 tree/local-run/_staging/_combined/worker_1/per_pg/ep_4.parquet  9919B  sha256:0b845321b359fcbc
@@ -35,7 +35,7 @@ tree/local-run/_staging/_combined/worker_1/rank_clocks.json  10B  sha256:6563c2b
 tree/local-run/_staging/_combined/worker_2/breakdown.parquet  13664B  sha256:f461ba5bf42c5a15
 tree/local-run/_staging/_combined/worker_2/per_pg/cp_3.parquet  10005B  sha256:b70ec58024a2bd89
 tree/local-run/_staging/_combined/worker_2/per_pg/default_pg_0.parquet  9939B  sha256:35365fd79b38abc5
-tree/local-run/_staging/_combined/worker_2/per_pg/diagnostics_0.parquet  8306B  sha256:c2b742e9cb007ee9
+tree/local-run/_staging/_combined/worker_2/per_pg/diagnostics_0.parquet  8934B  sha256:4a3368d8330a9eca
 tree/local-run/_staging/_combined/worker_2/per_pg/dp_replicate_5.parquet  10091B  sha256:cdef99c0963d2790
 tree/local-run/_staging/_combined/worker_2/per_pg/dp_shard_1.parquet  10075B  sha256:83eca06c0a47f114
 tree/local-run/_staging/_combined/worker_2/per_pg/ep_4.parquet  9925B  sha256:6081c4a686e7d86d
@@ -44,7 +44,7 @@ tree/local-run/_staging/_combined/worker_2/rank_clocks.json  10B  sha256:597cb16
 tree/local-run/_staging/_combined/worker_3/breakdown.parquet  13664B  sha256:e0221f3ce44a0004
 tree/local-run/_staging/_combined/worker_3/per_pg/cp_3.parquet  9998B  sha256:6ce84a2c5961824b
 tree/local-run/_staging/_combined/worker_3/per_pg/default_pg_0.parquet  9951B  sha256:5a58bf4578df804f
-tree/local-run/_staging/_combined/worker_3/per_pg/diagnostics_0.parquet  8306B  sha256:3cfc935c2c242e8a
+tree/local-run/_staging/_combined/worker_3/per_pg/diagnostics_0.parquet  8934B  sha256:64f73657acaf6df3
 tree/local-run/_staging/_combined/worker_3/per_pg/dp_replicate_5.parquet  10077B  sha256:7d0c1c64cadb41f3
 tree/local-run/_staging/_combined/worker_3/per_pg/dp_shard_1.parquet  10089B  sha256:2f35bba7b6bce589
 tree/local-run/_staging/_combined/worker_3/per_pg/ep_4.parquet  9915B  sha256:983ec8c0675479f6
@@ -53,7 +53,7 @@ tree/local-run/_staging/_combined/worker_3/rank_clocks.json  10B  sha256:3a76696
 tree/local-run/_staging/_combined/worker_4/breakdown.parquet  13664B  sha256:ee36ddc3e2c0c429
 tree/local-run/_staging/_combined/worker_4/per_pg/cp_3.parquet  10013B  sha256:8692da172453da17
 tree/local-run/_staging/_combined/worker_4/per_pg/default_pg_0.parquet  9950B  sha256:649875f69492590d
-tree/local-run/_staging/_combined/worker_4/per_pg/diagnostics_0.parquet  8306B  sha256:af03c0a396f95884
+tree/local-run/_staging/_combined/worker_4/per_pg/diagnostics_0.parquet  8934B  sha256:c5e89170a07925c8
 tree/local-run/_staging/_combined/worker_4/per_pg/dp_replicate_5.parquet  10078B  sha256:a27e913c632a8986
 tree/local-run/_staging/_combined/worker_4/per_pg/dp_shard_1.parquet  10068B  sha256:671cd9811924ac48
 tree/local-run/_staging/_combined/worker_4/per_pg/ep_4.parquet  9917B  sha256:4b6ca2f23f13925a
@@ -62,7 +62,7 @@ tree/local-run/_staging/_combined/worker_4/rank_clocks.json  10B  sha256:9ab6c74
 tree/local-run/_staging/_combined/worker_5/breakdown.parquet  13664B  sha256:4009946a68f2a638
 tree/local-run/_staging/_combined/worker_5/per_pg/cp_3.parquet  9996B  sha256:d4ba333d22a514c7
 tree/local-run/_staging/_combined/worker_5/per_pg/default_pg_0.parquet  9939B  sha256:454f9f82882bbc4e
-tree/local-run/_staging/_combined/worker_5/per_pg/diagnostics_0.parquet  8306B  sha256:d10ccb7b81ae09f1
+tree/local-run/_staging/_combined/worker_5/per_pg/diagnostics_0.parquet  8934B  sha256:43a4ea98385c9e91
 tree/local-run/_staging/_combined/worker_5/per_pg/dp_replicate_5.parquet  10082B  sha256:2ae53fb1daf62529
 tree/local-run/_staging/_combined/worker_5/per_pg/dp_shard_1.parquet  10070B  sha256:9347c06c03896316
 tree/local-run/_staging/_combined/worker_5/per_pg/ep_4.parquet  9931B  sha256:9c72dfb048292978
@@ -71,7 +71,7 @@ tree/local-run/_staging/_combined/worker_5/rank_clocks.json  10B  sha256:c62dd4f
 tree/local-run/_staging/_combined/worker_6/breakdown.parquet  13664B  sha256:d49bb4eeb8c59ec5
 tree/local-run/_staging/_combined/worker_6/per_pg/cp_3.parquet  9997B  sha256:1ae5b9ec414f5817
 tree/local-run/_staging/_combined/worker_6/per_pg/default_pg_0.parquet  9944B  sha256:ebe6214f53513f57
-tree/local-run/_staging/_combined/worker_6/per_pg/diagnostics_0.parquet  8306B  sha256:f5db040cce3dd751
+tree/local-run/_staging/_combined/worker_6/per_pg/diagnostics_0.parquet  8934B  sha256:8dbb121ec8fbfeb5
 tree/local-run/_staging/_combined/worker_6/per_pg/dp_replicate_5.parquet  10100B  sha256:e27156cb7ba8dbaf
 tree/local-run/_staging/_combined/worker_6/per_pg/dp_shard_1.parquet  10064B  sha256:a50d764eff2f91d8
 tree/local-run/_staging/_combined/worker_6/per_pg/ep_4.parquet  9935B  sha256:dc912b69e56d0c18
@@ -80,7 +80,7 @@ tree/local-run/_staging/_combined/worker_6/rank_clocks.json  10B  sha256:8557157
 tree/local-run/_staging/_combined/worker_7/breakdown.parquet  13664B  sha256:831895a199de63d6
 tree/local-run/_staging/_combined/worker_7/per_pg/cp_3.parquet  9983B  sha256:9367870fd1685a6d
 tree/local-run/_staging/_combined/worker_7/per_pg/default_pg_0.parquet  9960B  sha256:7def020bdbcf6a9c
-tree/local-run/_staging/_combined/worker_7/per_pg/diagnostics_0.parquet  8306B  sha256:431332591246dc45
+tree/local-run/_staging/_combined/worker_7/per_pg/diagnostics_0.parquet  8934B  sha256:73138dfa68af08c2
 tree/local-run/_staging/_combined/worker_7/per_pg/dp_replicate_5.parquet  10108B  sha256:5bd412d1375dbcfa
 tree/local-run/_staging/_combined/worker_7/per_pg/dp_shard_1.parquet  10066B  sha256:d358ae1376ae2ea4
 tree/local-run/_staging/_combined/worker_7/per_pg/ep_4.parquet  9922B  sha256:4fd3d255374461fb
@@ -89,7 +89,7 @@ tree/local-run/_staging/_combined/worker_7/rank_clocks.json  10B  sha256:1277ec1
 tree/local-run/_staging/results/pipeline_a/breakdown.parquet  14655B  sha256:ce49a5d7801e056a
 tree/local-run/_staging/results/pipeline_a/per_pg/cp_3.parquet  11930B  sha256:e8c7d83f67bbd05e
 tree/local-run/_staging/results/pipeline_a/per_pg/default_pg_0.parquet  11896B  sha256:a335e6b681b1103f
-tree/local-run/_staging/results/pipeline_a/per_pg/diagnostics_0.parquet  8529B  sha256:987c0cd9ab4210e5
+tree/local-run/_staging/results/pipeline_a/per_pg/diagnostics_0.parquet  9223B  sha256:ea68090f3b7eeb9a
 tree/local-run/_staging/results/pipeline_a/per_pg/dp_replicate_5.parquet  12120B  sha256:43c5d8e26b40b35d
 tree/local-run/_staging/results/pipeline_a/per_pg/dp_shard_1.parquet  12080B  sha256:ac76dd19b1a70b97
 tree/local-run/_staging/results/pipeline_a/per_pg/ep_4.parquet  11924B  sha256:7e98e973c3c75798
@@ -102,8 +102,8 @@ tree/local-run/results/pipeline_a/per_pg/cp_3.dpg  35386B  sha256:4b835f24d7aaa4
 tree/local-run/results/pipeline_a/per_pg/cp_3.parquet  11930B  sha256:e8c7d83f67bbd05e
 tree/local-run/results/pipeline_a/per_pg/default_pg_0.dpg  34221B  sha256:2012cdca4e77ba2f
 tree/local-run/results/pipeline_a/per_pg/default_pg_0.parquet  11896B  sha256:a335e6b681b1103f
-tree/local-run/results/pipeline_a/per_pg/diagnostics_0.dpg  1098B  sha256:e6a0e8540310b3fc
-tree/local-run/results/pipeline_a/per_pg/diagnostics_0.parquet  8529B  sha256:987c0cd9ab4210e5
+tree/local-run/results/pipeline_a/per_pg/diagnostics_0.dpg  1420B  sha256:6c136ffc5c718afb
+tree/local-run/results/pipeline_a/per_pg/diagnostics_0.parquet  9223B  sha256:ea68090f3b7eeb9a
 tree/local-run/results/pipeline_a/per_pg/dp_replicate_5.dpg  37062B  sha256:6f249737cc6fa21a
 tree/local-run/results/pipeline_a/per_pg/dp_replicate_5.parquet  12120B  sha256:43c5d8e26b40b35d
 tree/local-run/results/pipeline_a/per_pg/dp_shard_1.dpg  37960B  sha256:f3b5cf89edc3d8db

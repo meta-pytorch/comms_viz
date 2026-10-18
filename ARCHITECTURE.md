@@ -77,7 +77,9 @@ the rank's GPU events:
 ## Parallelism tab
 
 The page shows one process group at a time, with each rank's comm kernels
-on a shared timeline.
+on a shared timeline. Every group's timeline runs from the first to the last
+GPU event of all analyzed ranks, so switching groups keeps the axis and
+shows which part of the step each group is active in.
 
 A kernel counts as communication if its name is in `kernel_types.rs` (NCCL
 plus a few known collective libraries) or if it carries both a

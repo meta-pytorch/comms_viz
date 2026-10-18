@@ -954,6 +954,8 @@ fn diagnostics_df<'a>(
         Column::new("compute".into(), first_only(compute_busy)),
         Column::new("cpu_active".into(), first_only(cpu_active)),
         Column::new("window".into(), first_only(window)),
+        Column::new("gpu_start".into(), first_only(start)),
+        Column::new("gpu_end".into(), first_only(end)),
         Column::new("nccl_kernels".into(), first_only_u(nccl)),
         Column::new("nccl_unannotated".into(), first_only_u(nccl_bare)),
         Column::new("other_comm_unannotated".into(), first_only_u(other_bare)),
