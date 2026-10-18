@@ -2385,7 +2385,7 @@ const pl = {
     const sw = (style) => el("span", { style: `display:inline-block;width:14px;height:0;vertical-align:middle;margin:0 3px 0 10px;${style}` });
     legend.replaceChildren(`${metric}, per bucket:`,
       sw(`border-top:3px solid ${css("--s1")}`), "p50", sw(`border-top:3px solid ${css("--s4")}`), "max",
-      sw(`border-top:3px solid ${css("--s3")}`), "min", `  ·  scale ${vmin === 0 ? "0" : fmtCounter(vmin)} – ${fmtCounter(vmax)} (left of the first row)`,
+      sw(`border-top:3px solid ${css("--s3")}`), "min",
       sort ? `  ·  sorted by the ${sort.by} of the bucket at ${loc(sort.t - this.minT)} μs` : "");
     this.drawPmTracks();
   },
