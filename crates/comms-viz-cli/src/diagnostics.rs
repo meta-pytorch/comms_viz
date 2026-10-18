@@ -255,10 +255,10 @@ pub(crate) fn annotation_warnings(diag: &Diagnostics) -> Vec<String> {
         0.0
     };
     vec![format!(
-        "{} of {} ranks have NCCL kernels without process-group metadata ({share:.0}% of \
-         their NCCL kernel time, {bare} of {total} kernels; ranks {}): counted as \
-         communication, but on no group timeline and in no cross-rank statistic. See README, \
-         Collective annotations.",
+        "{} of {} ranks have NCCL kernels without process-group metadata (ranks {}; {bare} \
+         of {total} kernels, {share:.0}% of their NCCL kernel time). They will count towards \
+         per-rank communication time, but won't be shown on PG timelines or matched across \
+         ranks. See README / ARCHITECTURE for more details.",
         flagged.len(),
         diag.activity.len(),
         ranks_short(&ranks, 20)
@@ -406,6 +406,6 @@ mod tests {
         let warnings = annotation_warnings(&diag);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].starts_with("2 of 3 ranks"), "{}", warnings[0]);
-        assert!(warnings[0].contains("ranks 1,2)"), "{}", warnings[0]);
+        assert!(warnings[0].contains("(ranks 1,2;"), "{}", warnings[0]);
     }
 }
