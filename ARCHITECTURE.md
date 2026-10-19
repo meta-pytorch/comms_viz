@@ -39,12 +39,9 @@ shared storage or gathered first.
 There are two producers, both part of the PyTorch profiler:
 
 - **Kineto** (the default backend) writes Chrome-trace JSON
-  (`export_chrome_trace`). PyTorch adds a top-level `distributedInfo` object to
-  the trace: `backend`, `rank`, `world_size`, and `pg_config`, the list of
-  every process group with its name, description (`pg_desc`), size and
-  ranks. comms_viz takes the rank from it and uses `pg_config` to understand the PG
-  layout.
-- **Cuspy** (a newer CUPTI-based backend in PyTorch 2.15+) writes Perfetto protobuf
+  (`export_chrome_trace`). PyTorch adds `distributedInfo` metadata to
+  the trace, containing `backend`, `rank`, `world_size`, `pg_config`, and other PG metadata. comms_viz uses this to understand the PG layout.
+- **Cuspy** (a newer CUPTI-based backend in PyTorch 2.15) writes Perfetto protobuf
   (`.pftrace`). `distributedInfo` is not written, so PG layout is rebuilt from reading
   kernel metadata.
 
@@ -53,12 +50,10 @@ comms_viz relies on: process group name and description, collective name,
 sequence number, message sizes, dtype and group size.
 
 On the Parallelism tab, each process group that ran collectives in the
-captured step gets its own timeline, even if it spans the same ranks as
-another group. A group is labeled by the ranks it spans and the description
-c10d records for it. That description comes from DeviceMesh axis naming
-(`mesh_tp` is shown as `tp`), from the training framework (e.g. Megatron's
-`TENSOR_MODEL_PARALLEL_GROUP`), or is absent (PyTorch's default `undefined`),
-in which case the group is labeled by its process-group name.
+captured step gets its own timeline.
+A group is labeled by the ranks it spans and the description
+c10d records, which can come from DeviceMesh axis naming,
+or labeled by the training framework.
 
 DeviceMesh creates a separate process group per mesh for each axis, so a job
 that builds separate meshes (e.g. FSDP storage, compute) may show duplicate
@@ -76,17 +71,15 @@ the rank's GPU events:
 - `<collective>_total`: comm time per collective type.
 - `<axis>_<collective>_total`: the same, per axis.
 - `total_duration`: first GPU event start to last GPU event end.
-- `cudaLaunchKernel_total`, `cudaStreamSynchronize_total`, ...: CPU time in
-  those CUDA runtime calls.
+- `cudaLaunchKernel_total`, `cudaEventSynchronize_total`, `cudaStreamSynchronize_total`,
+  `cudaHostAlloc_total`: CPU time in those four CUDA runtime calls.
 
 ## Parallelism tab
 
-The page shows one process group at a time, with each rank's comm kernels
-on a shared timeline. Every group's timeline runs from the first to the last
-GPU event of all analyzed ranks, so switching groups keeps the axis and
-shows which part of the step each group is active in.
+The Parallelism tab shows one process group at a time, with each rank's comm kernels
+on a side-by-side timeline.
 
-A kernel counts as communication if its name is in `kernel_types.rs` (NCCL
+A kernel is recognized as communication if its name is in `kernel_types.rs` (NCCL
 plus a few known collective libraries) or if it carries both a
 `Collective name` and a `Process Group Name`, as c10d's collectives do. It
 appears in a group's timeline only if it carries the process-group metadata.
@@ -140,7 +133,8 @@ come without the c10d tags. PyTorch can annotate them at capture time
 (`enable_annotations=True`), and comms_viz copies those annotations onto the
 replayed kernels, matching them by `graph node id`.
 
-`--write-repaired-traces` also writes each rank's "repaired" trace to
-`tree/<run-id>/traces/`, after annotating kernel metadata, dropping stray
-annotation events, and moving overlapping graph kernels onto a separate
-stream.
+`--write-repaired-traces` also writes each rank's trace to `tree/<run-id>/traces/`,
+for standalone viewing. JSON traces with CUDA graphs are repaired first: annotations from
+`kernel_annotations/*.pkl` are copied onto replayed kernels, and replayed kernels that
+overlap on the default stream are moved to a separate stream. Other traces are copied
+unchanged.

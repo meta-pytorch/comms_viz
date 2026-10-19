@@ -15,7 +15,7 @@ type and process group:
 
 The **Parallelism** tab shows one process group at a time (e.g. one TP or
 FSDP group), with each rank's comm kernels side by side on a shared timeline,
-alongside per-rank utilization and, when the traces carry GPU counters (SM
+alongside per-rank utilization and, when the traces carry GPU counters (e.g. SM
 activity, DRAM and NVLink bandwidth), a per-rank track of each counter over
 time.
 
@@ -60,8 +60,8 @@ cargo build --release --locked
 
 - PyTorch's Kineto backend works best with PyTorch 2.6 or later, for DeviceMesh axis names
   to be properly emitted.
-- `.pftrace` traces come from PyTorch's Cuspy profiler backend, currently only in nightlies,
-  but likely to be released in PyTorch 2.15.
+- `.pftrace` traces come from PyTorch's Cuspy profiler backend (`torch.profiler.CuspyConfig`),
+  in PyTorch 2.15 (or nightlies from 2026-09-10).
 - Matching collectives across ranks needs PyTorch 2.12 or later, which records each collective
   kernel's c10d sequence number.
 - Collective metadata on CUDA-graph replays and in `.pftrace` (Cuspy) traces needs a nightly
@@ -75,10 +75,18 @@ group timeline or matched across ranks.
 
 ### CUDA graphs
 
-Collectives replayed from a CUDA graph carry process-group metadata only if
-the graph is captured with `torch.cuda.graph(..., enable_annotations=True)`.
-With the Kineto backend, the framework must also export the trace with
-`export_chrome_trace(path, cuda_graph_annotations=get_kernel_annotations())`.
+Collectives replayed from a CUDA graph carry process-group metadata only if the graph is
+captured with annotations, and, with the Kineto backend, the trace is exported with them:
+
+```python
+from torch.cuda._graph_annotations import get_kernel_annotations
+
+with torch.cuda.graph(graph, enable_annotations=True):
+    ...  # capture
+
+# Kineto backend only (Cuspy applies the annotations itself):
+prof.export_chrome_trace(path, cuda_graph_annotations=get_kernel_annotations())
+```
 
 Without these, replayed collectives have no process-group metadata, so they aren't shown on
 group timelines or matched across ranks.
