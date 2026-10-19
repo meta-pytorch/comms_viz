@@ -286,8 +286,6 @@ details.node > summary { cursor: pointer; font-size: 12px; padding: 1px 0; }
               <input type="text" id="pl-group" autocomplete="off" spellcheck="false"
                      placeholder="group" style="width:170px">
               <div class="talist" id="pl-group-list" style="display:none"></div></span></span>
-            <label class="note" id="pl-flash-wrap" style="display:none">
-              <input type="checkbox" id="pl-flash"> Show Attention Kernels</label>
             <span class="note" id="pl-hint">Drag, pinch or w/s to zoom · scroll or a/d to pan · double-click or Reset to clear · hover a collective to highlight its peers</span>
             <button class="btn" id="pl-reset">Reset Zoom</button>
           </div>
@@ -682,7 +680,6 @@ function eventsFromTable(names, get, nrows) {
       outN: col.out_nelems != null ? +get(col.out_nelems, r) : -1,
       groupSize: col.group_size != null ? +get(col.group_size, r) : -1,
       step: col.step != null && +get(col.step, r) >= 0 ? +get(col.step, r) : null,
-      flash: col.para_type != null && get(col.para_type, r) === "flash",
     };
   }
   return evs;
@@ -799,7 +796,6 @@ function cohortsOf(events) {
   const perRank = new Map();
   for (const e of events) {
     e.cohortKey = null; e.instance = null;
-    if (e.flash) continue;
     if (!perRank.has(e.rank)) perRank.set(e.rank, []);
     perRank.get(e.rank).push(e);
   }
@@ -832,14 +828,16 @@ function cohortsOf(events) {
       if (inst.dur > c.slow.dur) c.slow = inst;
     });
   }
-  return { list, byKey, unmatched: events.filter((e) => !e.flash && e.cohortKey == null).length };
+  return { list, byKey, unmatched: events.filter((e) => e.cohortKey == null).length };
 }
 // One rank's events (sorted by start) as one instance per collective call.
 // Events a call tags with the same collective metadata, e.g. a copy-engine
 // all-gather's several copies, join one instance when they share PG, step,
 // collective, sequence, p2p direction and peer, and graph replay, and are
 // consecutive among that PG's events, since graph replays repeat
-// sequences. Events without a sequence are never grouped. An instance with
+// sequences. Events without a sequence, and p2p send/recv (c10d gives every
+// one sequence 0, so back-to-back sends to one peer would look like one call),
+// are never grouped. An instance with
 // a communication kernel spans its kernels, so local work the call also
 // tags, like copy-in/out, can't stretch it; one made only of copies (a
 // copy-engine collective) spans all of them.
@@ -847,7 +845,7 @@ function instancesOf(evs) {
   const groups = [], open = new Map(); // pg -> [key, events] of its last group
   for (const ev of evs) {
     const peer = ev.operation === "send" ? ev.dst : ev.operation === "recv" ? ev.src : "";
-    const key = ev.sequence == null ? null : [ev.step ?? "?", ev.collective, ev.sequence,
+    const key = ev.sequence == null || isP2p(ev) ? null : [ev.step ?? "?", ev.collective, ev.sequence,
       ev.operation ?? "", peer ?? "", ev.replay ?? ""].join("\u0000");
     const last = open.get(ev.pg);
     if (key != null && last && last[0] === key) { last[1].push(ev); continue; }
@@ -1013,16 +1011,39 @@ function renderHeader() {
 // --- PG calculator -----------------------------------------------------------
 // Rebound at boot (renderPgSearch / initSideNav); rank clicks land here.
 let pgCalcSet = () => {}, snavExpand = () => {};
+// A group term: a group key, then a number (`tp1`, `tp_1`), or the key
+// alone when it has one group. The key matches case-insensitively and the
+// longest matching key wins, so keys with upper case or digits
+// (TENSOR_MODEL_PARALLEL_GROUP, pp_p2p_round_0) resolve. The number counts
+// the key's groups by lowest rank, as the structured report's aliases do.
+// All-digit terms are ranks, never group terms (some keys are numbers).
+function pgTerm(PG, term) {
+  if (/^\d+$/.test(term)) return null;
+  const t = term.toLowerCase();
+  let best = null;
+  for (const [key, p] of Object.entries(PG)) {
+    const k = key.toLowerCase();
+    if (!t.startsWith(k) || (best && k.length <= best.key.length)) continue;
+    const rest = t.slice(k.length).replace(/^_/, "");
+    if (/^\d+$/.test(rest)) best = { key, n: +rest };
+    else if (rest === "" && p.groups.length === 1) best = { key, n: 0 };
+  }
+  if (!best) return null;
+  const groups = PG[best.key].groups;
+  const low = groups.map((ranks) => ranks.reduce((m, r) => Math.min(m, r), Infinity));
+  const byLowestRank = groups.map((_, i) => i).sort((a, b) => low[a] - low[b] || a - b);
+  return { ...best, index: byLowestRank[best.n], count: groups.length };
+}
 async function pgQuery(q) {
   const { PG, rankToGroups } = (await pgmReady()) || { PG: {}, rankToGroups: {} };
   const out = { ranks: new Set(), hosts: new Set(), notes: [], groups: [] };
   for (let term of q.split(",").map((t) => t.trim()).filter(Boolean)) {
-    const m = term.toLowerCase().match(/^([a-z_+]+)(\d+)$/);
-    if (m && PG[m[1]]) {
-      const gid = +m[2], p = PG[m[1]];
-      if (gid >= p.groups.length) { out.notes.push(`${m[1]}: valid ids 0–${p.groups.length - 1}`); continue; }
+    const g = pgTerm(PG, term);
+    if (g) {
+      const p = PG[g.key], gid = g.index;
+      if (g.n >= g.count) { out.notes.push(`${g.key}: valid ids 0–${g.count - 1}`); continue; }
       p.groups[gid].forEach((r) => out.ranks.add(r));
-      out.groups.push({ pg: m[1], gid, stem: groupStem(PG, m[1], p.ids[gid] ?? String(gid)) });
+      out.groups.push({ pg: g.key, gid, stem: groupStem(PG, g.key, p.ids[gid] ?? String(gid)) });
     } else if (/^\d+$/.test(term)) {
       const r = +term;
       if (rankToGroups[r]) { out.ranks.add(r);
@@ -1756,7 +1777,6 @@ const pl = {
       },
       () => stemLabel(this.stem), (label) => this.load(labelStem(label)));
     document.getElementById("pl-reset").addEventListener("click", () => { this.domain = null; this.draw(); });
-    document.getElementById("pl-flash").addEventListener("change", () => this.build());
     document.getElementById("pl-imb-toggle").addEventListener("change", (e) => {
       document.getElementById("pl-imb").style.display = e.target.checked ? "" : "none";
       if (e.target.checked) this.renderImbalance();
@@ -1933,11 +1953,7 @@ const pl = {
     this.build();
   },
   build() {
-    const showFlash = document.getElementById("pl-flash").checked;
-    const all = this.cache.get(this.stem) || [];
-    const anyFlash = all.some((e) => e.flash);
-    document.getElementById("pl-flash-wrap").style.display = anyFlash ? "" : "none";
-    this.events = all.filter((e) => showFlash || !e.flash);
+    this.events = (this.cache.get(this.stem) || []).slice();
     this._cohorts = null;
     this._hoverKey = null;
     this.pmSort = null;
@@ -2134,8 +2150,8 @@ const pl = {
       if (value != null) tt.append(r(label, value));
     // Peer stats for this kernel's cohort: eyeballing the straggler across
     // a few thousand rows is what the offline analysis was for, so name it
-    // here instead. Flash kernels are outside the cohort rule.
-    const c = hit.flash || hit.operation || /SendRecv/i.test(hit.originalName)
+    // here instead.
+    const c = hit.operation || /SendRecv/i.test(hit.originalName)
       ? null : this.cohorts().byKey.get(hit.cohortKey);
     const peers = this.cohortComplete(c);
     this.setHoverKey(peers ? hit.cohortKey : null);

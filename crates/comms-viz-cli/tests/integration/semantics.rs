@@ -178,6 +178,9 @@ fn summary_finds_the_injected_faults() {
         .collect();
     assert_eq!(low, (12..16).collect(), "{sm:#}");
     let q = &s["data_quality"];
+    // Every send/recv is its own call: c10d gives them all sequence 0, so
+    // back-to-back sends to one peer must not merge (93 p2p kernels).
+    assert_eq!(q["unmatchable_kernels"]["p2p"], 93);
     assert_eq!(q["ranks_losing_pg_metadata"], 1);
     assert_eq!(q["worst_ranks_losing_pg_metadata"][0]["rank"], 2);
     assert!(

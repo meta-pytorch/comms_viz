@@ -75,7 +75,6 @@ fn events_from_table(table: &crate::diagnostics::Table) -> Vec<Event> {
     let get = |name: &str, row: usize| table.col(name).map(|col| col[row].as_str());
     let optional = |name: &str, row: usize| get(name, row).filter(|v| !v.is_empty());
     (0..table.nrows())
-        .filter(|&row| get("para_type", row) != Some("flash"))
         .map(|row| {
             let raw = get("name", row).unwrap_or("");
             let collective = get("collective_name", row).unwrap_or("").to_string();
@@ -117,7 +116,8 @@ fn events_from_table(table: &crate::diagnostics::Table) -> Vec<Event> {
 /// p2p direction and peer, and graph replay, e.g. a copy-engine
 /// collective's copies, merge into one call. A call with a communication
 /// kernel spans its kernels; one made only of copies spans all of them.
-/// Events without a sequence stay single.
+/// Events without a sequence, and p2p send/recv, stay single: c10d gives
+/// every send/recv sequence 0, so back-to-back sends to one peer would merge.
 fn instances(events: &[Event]) -> Vec<Event> {
     let mut order: Vec<usize> = (0..events.len()).collect();
     order.sort_by(|&a, &b| {
@@ -135,7 +135,7 @@ fn instances(events: &[Event]) -> Vec<Event> {
     let mut open: HashMap<(i64, &str), (String, usize)> = HashMap::new();
     for i in order {
         let ev = &events[i];
-        let key = ev.sequence.as_ref().map(|seq| {
+        let key = ev.sequence.as_ref().filter(|_| !ev.p2p).map(|seq| {
             format!(
                 "{:?}\0{}\0{seq}\0{}\0{}\0{}",
                 ev.step, ev.collective, ev.operation, ev.peer, ev.replay
