@@ -880,6 +880,7 @@ const PM_STATS = ["n", "min", "p10", "p50", "mean", "p90", "p99", "max", "std"];
     STEM_LABEL.set(s, label); LABEL_STEM.set(label, s);
   }
 }
+// <group-labels>
 function prettyAxis(axis) {
   const upper = new Set(["cp", "dp", "ep", "fsdp", "hsdp", "pp", "tp"]);
   return axis.split(/([_+])/).map((part) =>
@@ -892,8 +893,9 @@ function groupStem(PG, key, gid) {
   const candidates = [`${PG[key].alias || key}_${gid}`, `${key}_${gid}`];
   return candidates.find((candidate) => STEMS.has(candidate));
 }
-// Each group's lowest rank, for ordering the group picker; set with the labels.
-const STEM_FIRST_RANK = new Map();
+// Each group's lowest rank, for ordering the group picker, and its ranks;
+// set with the labels.
+const STEM_FIRST_RANK = new Map(), STEM_RANKS = new Map();
 function installGroupLabels(PG) {
   const entries = [];
   for (const [key, group] of Object.entries(PG)) {
@@ -901,6 +903,7 @@ function installGroupLabels(PG) {
       const stem = groupStem(PG, key, group.ids[i] ?? String(i));
       if (!stem) return;
       STEM_FIRST_RANK.set(stem, Math.min(...ranks));
+      STEM_RANKS.set(stem, ranks);
       const shown = ranks.slice(0, 8).join(", ");
       const more = ranks.length > 8 ? `, … +${loc(ranks.length - 8)}` : "";
       entries.push({ stem, base: `${prettyAxis(group.alias || key)} (r ${shown}${more})` });
@@ -918,6 +921,7 @@ function installGroupLabels(PG) {
     LABEL_STEM.set(label, entry.stem);
   }
 }
+// </group-labels>
 const stemLabel = (s) => STEM_LABEL.get(s) ?? s;
 const labelStem = (l) => LABEL_STEM.get(l) ?? l;
 // Group picker order: axis, then lowest rank, then label, numbers compared as
@@ -1005,16 +1009,19 @@ function renderHeader() {
 // Rebound at boot (renderPgSearch / initSideNav); rank clicks land here.
 let pgCalcSet = () => {}, snavExpand = () => {};
 async function pgQuery(q) {
-  const { PG, rankToGroups } = (await pgmReady()) || { PG: {}, rankToGroups: {} };
+  // pgmReady() also installs the group labels the lookup below reads.
+  const { rankToGroups } = (await pgmReady()) || { rankToGroups: {} };
   const out = { ranks: new Set(), hosts: new Set(), notes: [], groups: [] };
+  // A group is queried by its label, exactly as the picker and these results
+  // show it; labels contain commas, so the whole query is tried first.
+  const stem = LABEL_STEM.get(q.trim());
+  if (stem) {
+    (STEM_RANKS.get(stem) || []).forEach((r) => out.ranks.add(r));
+    out.groups.push({ stem });
+    return out;
+  }
   for (let term of q.split(",").map((t) => t.trim()).filter(Boolean)) {
-    const m = term.toLowerCase().match(/^([a-z_+]+)(\d+)$/);
-    if (m && PG[m[1]]) {
-      const gid = +m[2], p = PG[m[1]];
-      if (gid >= p.groups.length) { out.notes.push(`${m[1]}: valid ids 0–${p.groups.length - 1}`); continue; }
-      p.groups[gid].forEach((r) => out.ranks.add(r));
-      out.groups.push({ pg: m[1], gid, stem: groupStem(PG, m[1], p.ids[gid] ?? String(gid)) });
-    } else if (/^\d+$/.test(term)) {
+    if (/^\d+$/.test(term)) {
       const r = +term;
       if (rankToGroups[r]) { out.ranks.add(r);
         out.groups.push(...(rankToGroups[r] || [])); }

@@ -362,32 +362,138 @@ fn display_name(e: &Event) -> &str {
         .unwrap_or(c)
 }
 
-/// `tp_<40 hex>` groups become `tp0`, `tp1`, ... ordered by lowest rank;
-/// a prefix with a single group keeps the bare prefix.
-fn group_aliases(groups: &[(String, i64)]) -> Vec<String> {
-    let prefix = |stem: &str| {
-        stem.rsplit_once('_')
-            .filter(|(_, hash)| hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
-            .map(|(prefix, _)| prefix.to_string())
+/// An axis as the page titles it (`prettyAxis` in static_page.html): `_`
+/// becomes a space and `+` a spaced plus; parallelism abbreviations are
+/// upper-cased and other words capitalized.
+fn pretty_axis(axis: &str) -> String {
+    const UPPER: [&str; 7] = ["cp", "dp", "ep", "fsdp", "hsdp", "pp", "tp"];
+    let mut out = String::new();
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        if UPPER.contains(&word.to_lowercase().as_str()) {
+            out.push_str(&word.to_uppercase());
+        } else {
+            let mut chars = word.chars();
+            if let Some(first) = chars.next() {
+                out.extend(first.to_uppercase());
+                out.push_str(chars.as_str());
+            }
+        }
+        word.clear();
     };
-    let mut by_prefix: BTreeMap<String, Vec<(i64, usize)>> = BTreeMap::new();
-    for (i, (stem, min_rank)) in groups.iter().enumerate() {
-        if let Some(p) = prefix(stem) {
-            by_prefix.entry(p).or_default().push((*min_rank, i));
+    for c in axis.chars() {
+        match c {
+            '_' => {
+                flush(&mut word, &mut out);
+                out.push(' ');
+            }
+            '+' => {
+                flush(&mut word, &mut out);
+                out.push_str(" + ");
+            }
+            c => word.push(c),
         }
     }
-    let mut aliases: Vec<String> = groups.iter().map(|(stem, _)| stem.clone()).collect();
-    for (p, mut members) in by_prefix {
-        if members.len() == 1 {
-            aliases[members[0].1] = p;
-            continue;
+    flush(&mut word, &mut out);
+    out
+}
+
+/// An integer with en-US digit grouping (the page's `loc`).
+fn en_us(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
         }
-        members.sort_unstable();
-        for (n, (_, i)) in members.into_iter().enumerate() {
-            aliases[i] = format!("{p}{n}");
+        out.push(c);
+    }
+    out
+}
+
+/// Each group's label as the page shows it in the group picker and the PG
+/// calculator (`installGroupLabels` in static_page.html), by per-PG stem:
+/// the axis title, the first eight ranks, and ` · i/n` when several groups
+/// read the same. The report names groups by these labels, so a name copied
+/// from it finds the group on the page.
+fn page_group_labels(data: &RunData, stems: &HashSet<&str>) -> HashMap<String, String> {
+    let Some(map) = data
+        .pg_map_json
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+    else {
+        return HashMap::new();
+    };
+    let info = data
+        .metadata_json
+        .as_ref()
+        .and_then(|m| m.get("pg_info"))
+        .and_then(|p| p.get("groups"));
+    // The page walks pg_map in JavaScript object order: integer-like keys
+    // ascending, then the others in the file's (sorted) order.
+    let array_index = |k: &str| k.parse::<u32>().ok().filter(|n| n.to_string() == k);
+    let mut keys: Vec<&String> = map.keys().collect();
+    keys.sort_by(|a, b| match (array_index(a), array_index(b)) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.cmp(b),
+    });
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for key in keys {
+        let v = &map[key.as_str()];
+        let alias = info
+            .and_then(|g| g.get(key.as_str()))
+            .and_then(|g| g.get("alias"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|a| !a.is_empty())
+            .unwrap_or(key);
+        let ids = v.get("pg_ids").and_then(serde_json::Value::as_array);
+        let groups = v.get("pg_ranks_map").and_then(serde_json::Value::as_array);
+        for (i, ranks) in groups.into_iter().flatten().enumerate() {
+            let gid = ids
+                .and_then(|ids| ids.get(i))
+                .map(|id| id.as_str().map_or_else(|| id.to_string(), str::to_string))
+                .unwrap_or_else(|| i.to_string());
+            let Some(stem) = [format!("{alias}_{gid}"), format!("{key}_{gid}")]
+                .into_iter()
+                .find(|stem| stems.contains(stem.as_str()))
+            else {
+                continue;
+            };
+            let ranks: Vec<String> = ranks
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|r| r.to_string())
+                .collect();
+            let more = if ranks.len() > 8 {
+                format!(", … +{}", en_us(ranks.len() - 8))
+            } else {
+                String::new()
+            };
+            let shown = ranks.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
+            entries.push((stem, format!("{} (r {shown}{more})", pretty_axis(alias))));
         }
     }
-    aliases
+    let mut totals: HashMap<&str, usize> = HashMap::new();
+    for (_, base) in &entries {
+        *totals.entry(base).or_default() += 1;
+    }
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    let mut labels = HashMap::new();
+    for (stem, base) in &entries {
+        let ordinal = seen.entry(base).or_default();
+        *ordinal += 1;
+        let total = totals[base.as_str()];
+        let label = if total > 1 {
+            format!("{base} · {ordinal}/{total}")
+        } else {
+            base.clone()
+        };
+        labels.insert(stem.clone(), label);
+    }
+    labels
 }
 
 /// The parallelism axis of a per-PG stem (`tp_<hash>`, `pp_p2p_round_0_<hash>-r4`):
@@ -685,11 +791,17 @@ pub(crate) fn write_structured_report(data: &RunData, stem: &str, dest: &Path) -
             Ok(summarize_group(i, stem, axis_of(stem, &axes), &events))
         })
         .collect::<Result<_>>()?;
-    let keys: Vec<(String, i64)> = groups
+    let stems: HashSet<&str> = data.per_pg_all.iter().map(|(s, _, _)| s.as_str()).collect();
+    let labels = page_group_labels(data, &stems);
+    let aliases: Vec<String> = groups
         .iter()
-        .map(|g| (g.stem.clone(), g.ranks.first().copied().unwrap_or(0)))
+        .map(|g| {
+            labels
+                .get(&g.stem)
+                .cloned()
+                .unwrap_or_else(|| g.stem.clone())
+        })
         .collect();
-    let aliases = group_aliases(&keys);
     let diag = crate::diagnostics::read(&data.per_pg_all)?;
     let hosts = rank_hosts(data.rank_map_json.as_deref());
     let summary = build_summary(data, &groups, &aliases, &diag, &hosts);
@@ -1514,20 +1626,17 @@ mod tests {
     }
 
     #[test]
-    fn hashed_groups_get_short_aliases() {
-        let hash = |c: char| c.to_string().repeat(40);
-        let groups = vec![
-            (format!("tp_{}", hash('b')), 2),
-            (format!("tp_{}", hash('a')), 0),
-            (format!("fsdp_{}", hash('c')), 0),
-            ("default_0".to_string(), 0),
-            ("tp_short".to_string(), 0),
-        ];
+    fn axis_titles_and_rank_counts_match_the_page() {
+        assert_eq!(pretty_axis("dp_shard"), "DP Shard");
         assert_eq!(
-            group_aliases(&groups),
-            ["tp1", "tp0", "fsdp", "default_0", "tp_short"],
-            "tp groups are numbered by lowest rank; a lone prefix and non-hash stems keep their names"
+            pretty_axis("TENSOR_MODEL_PARALLEL_GROUP"),
+            "TENSOR MODEL PARALLEL GROUP"
         );
+        assert_eq!(pretty_axis("dp+cp"), "DP + CP");
+        assert_eq!(pretty_axis("pp_p2p_round_0"), "PP P2p Round 0");
+        assert_eq!(en_us(248), "248");
+        assert_eq!(en_us(49144), "49,144");
+        assert_eq!(en_us(1234567), "1,234,567");
     }
 
     #[test]

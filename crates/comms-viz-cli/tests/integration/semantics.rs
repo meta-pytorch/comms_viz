@@ -351,3 +351,103 @@ fn structured_report_rewrite_leaves_no_stale_files() {
     files.sort();
     assert_eq!(files, ["README.md", "summary.json"]);
 }
+
+/// The structured report names groups by the page's labels (the group
+/// picker's and PG calculator's, `<group-labels>` in static_page.html, run
+/// under node), so a group name copied from the report finds it on the page.
+#[test]
+fn page_and_report_name_groups_alike() {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: node not found");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (out, s, _) = analyze(tmp.path());
+    let page = std::fs::read_to_string(
+        harness::workspace_root().join("crates/comms-viz-cli/src/static_page.html"),
+    )
+    .expect("page source");
+    let start = page.find("// <group-labels>").expect("no <group-labels>");
+    let region = &page[start..page.find("// </group-labels>").expect("no </group-labels>")];
+    let per_pg = per_pg_dir(&out);
+    let run_root = per_pg.ancestors().nth(3).expect("run root");
+    let read_json = |name: &str| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(run_root.join(name)).expect(name))
+            .expect(name)
+    };
+    let stems: Vec<String> = std::fs::read_dir(&per_pg)
+        .expect("per_pg")
+        .map(|e| e.expect("entry").path())
+        .filter(|p| p.extension().is_some_and(|e| e == "dpg"))
+        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+        .filter(|s| !comms_viz_core::analysis::is_diagnostics_member(s))
+        .collect();
+    let input = tmp.path().join("labels_in.json");
+    std::fs::write(
+        &input,
+        serde_json::json!({
+            "stems": stems,
+            "pg_map": read_json("pg_map.json"),
+            "pg_info": read_json("metadata.json")["pg_info"]["groups"],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let script = format!(
+        r#"const loc = (n) => Math.round(n).toLocaleString("en-US");
+const STEM_LABEL = new Map(), LABEL_STEM = new Map();
+const input = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8"));
+const STEMS = new Set(input.stems);
+{region}
+const PG = {{}};
+for (const [key, v] of Object.entries(input.pg_map)) {{
+  const g = (input.pg_info && input.pg_info[key]) || {{}};
+  const groups = v.pg_ranks_map || [];
+  PG[key] = {{ alias: g.alias || key, groups, ids: v.pg_ids || groups.map((_, i) => String(i)) }};
+}}
+installGroupLabels(PG);
+console.log(JSON.stringify([...STEM_LABEL.values()]));
+"#
+    );
+    let script_path = tmp.path().join("labels.js");
+    std::fs::write(&script_path, script).unwrap();
+    let run = std::process::Command::new("node")
+        .arg(&script_path)
+        .arg(&input)
+        .output()
+        .expect("run node");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let labels: std::collections::BTreeSet<String> =
+        serde_json::from_slice(&run.stdout).expect("labels json");
+    fn groups_named(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                for (k, v) in m {
+                    match (k.as_str(), v) {
+                        ("group", Value::String(g)) => out.push(g.clone()),
+                        _ => groups_named(v, out),
+                    }
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|v| groups_named(v, out)),
+            _ => {}
+        }
+    }
+    let mut named = Vec::new();
+    groups_named(&s, &mut named);
+    assert!(!named.is_empty(), "the summary names no groups");
+    for g in &named {
+        assert!(
+            labels.contains(g),
+            "{g:?} is not a page label; page labels: {labels:?}"
+        );
+    }
+}
