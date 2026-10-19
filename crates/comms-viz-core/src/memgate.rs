@@ -599,7 +599,9 @@ impl MemGate {
             };
         }
         let cap = usize::try_from(self.budget / st.foot_ewma.max(1)).unwrap_or(usize::MAX);
-        let model = cap.clamp(CAP_MIN, self.workers);
+        // A one-worker pool (one rank, or --threads 1) can't reach CAP_MIN;
+        // clamp panics when min > max.
+        let model = cap.clamp(CAP_MIN.min(self.workers), self.workers);
         st.model_cap = Some(model);
         if st.backoff {
             return;
@@ -1608,6 +1610,15 @@ mod tests {
         assert_eq!(unblocked.load(Ordering::SeqCst), 0, "model cap must hold");
         drop(permits);
         j.join().unwrap();
+    }
+
+    #[test]
+    fn observe_live_with_one_worker() {
+        let mut g = test_gate(1 << 40, 64);
+        g.workers = 1;
+        let mut st = g.state.lock().unwrap();
+        g.observe_live(&mut st, FOOT_MIN_BYTES * 2, 0, 0);
+        assert_eq!(st.model_cap, Some(1));
     }
 
     #[test]
