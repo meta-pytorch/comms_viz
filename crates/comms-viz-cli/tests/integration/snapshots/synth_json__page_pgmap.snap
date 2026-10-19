@@ -1,0 +1,180 @@
+---
+source: crates/comms-viz-cli/tests/integration/page.rs
+expression: "serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(&island(&html,\n\"comms_viz-pgmap\")).expect(\"pgmap island parses\")).expect(\"pgmap pretty\")"
+---
+{
+  "cp": {
+    "backend_configs": [
+      "cuda:nccl"
+    ],
+    "pg_descs": [
+      "mesh_cp"
+    ],
+    "pg_ids": [
+      "3"
+    ],
+    "pg_names": [
+      "3"
+    ],
+    "pg_ranks_map": [
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    ],
+    "pg_sizes": [
+      8
+    ]
+  },
+  "default_pg": {
+    "backend_configs": [
+      "cuda:nccl"
+    ],
+    "pg_descs": [
+      "default_pg"
+    ],
+    "pg_ids": [
+      "0"
+    ],
+    "pg_names": [
+      "0"
+    ],
+    "pg_ranks_map": [
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    ],
+    "pg_sizes": [
+      8
+    ]
+  },
+  "dp_replicate": {
+    "backend_configs": [
+      "cuda:nccl"
+    ],
+    "pg_descs": [
+      "mesh_dp_replicate"
+    ],
+    "pg_ids": [
+      "5"
+    ],
+    "pg_names": [
+      "5"
+    ],
+    "pg_ranks_map": [
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    ],
+    "pg_sizes": [
+      8
+    ]
+  },
+  "dp_shard": {
+    "backend_configs": [
+      "cuda:nccl"
+    ],
+    "pg_descs": [
+      "mesh_dp_shard"
+    ],
+    "pg_ids": [
+      "1"
+    ],
+    "pg_names": [
+      "1"
+    ],
+    "pg_ranks_map": [
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    ],
+    "pg_sizes": [
+      8
+    ]
+  },
+  "ep": {
+    "backend_configs": [
+      "cuda:nccl"
+    ],
+    "pg_descs": [
+      "mesh_ep"
+    ],
+    "pg_ids": [
+      "4"
+    ],
+    "pg_names": [
+      "4"
+    ],
+    "pg_ranks_map": [
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    ],
+    "pg_sizes": [
+      8
+    ]
+  },
+  "tp": {
+    "backend_configs": [
+      "cuda:nccl"
+    ],
+    "pg_descs": [
+      "mesh_tp"
+    ],
+    "pg_ids": [
+      "2"
+    ],
+    "pg_names": [
+      "2"
+    ],
+    "pg_ranks_map": [
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    ],
+    "pg_sizes": [
+      8
+    ]
+  }
+}

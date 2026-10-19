@@ -1,0 +1,35 @@
+---
+source: crates/comms-viz-cli/tests/integration/analysis.rs
+expression: meta_dump
+---
+===== MANIFEST
+results/pipeline_a/breakdown.parquet
+results/pipeline_a/per_pg/cp_3.parquet
+results/pipeline_a/per_pg/default_pg_0.parquet
+results/pipeline_a/per_pg/diagnostics_0.parquet
+results/pipeline_a/per_pg/dp_replicate_5.parquet
+results/pipeline_a/per_pg/dp_shard_1.parquet
+results/pipeline_a/per_pg/ep_4.parquet
+results/pipeline_a/per_pg/tp_2.parquet
+===== config.json
+{"engine":{"name":"comms_viz","rev": "[GIT_REV]","version":"0.1.0"},"result_dir":"results","run_id":"local-run","trace_format":"json","trace_root":"/fixtures/synth/step_000000000106","worker_count":8,"world_size":8}
+===== run.json
+{"completed_at":1700000001000000,"error":null,"run_id":"local-run","run_name":"","started_at":1700000000000000,"status":4,"total_ranks":8}
+===== status.json
+{"elapsed_s":1.0,"phase":"completed","phases":{"aggregation":{"completed_at":1700000001000000,"duration_s":0.0,"started_at":1700000001000000,"status":"completed"},"assign":{"completed_at":1700000000000000,"duration_s":0.0,"started_at":1700000000000000,"status":"completed"},"claim":{"completed_at":1700000000000000,"duration_s":0.0,"started_at":1700000000000000,"status":"completed"},"processing":{"completed_at":1700000001000000,"duration_s":1.0,"started_at":1700000000000000,"status":"completed"}},"ranks":{"processed":8,"total":8},"run_id":"local-run","shard_count":8,"shards":{"completed":8,"failed":0,"in_flight":0,"pending":0},"version":2,"workers_active":0,"workers_done":8}
+===== worker_0.json
+{"assigned":1,"duration_s":1.0,"errors":0,"processed":1,"rank_hi":1,"rank_lo":0,"skipped":0,"started_at":1700000000000000,"state":"completed","updated_at":1700000001000000,"worker_index":0}
+===== worker_1.json
+{"assigned":1,"duration_s":1.0,"errors":0,"processed":1,"rank_hi":2,"rank_lo":1,"skipped":0,"started_at":1700000000000000,"state":"completed","updated_at":1700000001000000,"worker_index":1}
+===== worker_2.json
+{"assigned":1,"duration_s":1.0,"errors":0,"processed":1,"rank_hi":3,"rank_lo":2,"skipped":0,"started_at":1700000000000000,"state":"completed","updated_at":1700000001000000,"worker_index":2}
+===== worker_3.json
+{"assigned":1,"duration_s":1.0,"errors":0,"processed":1,"rank_hi":4,"rank_lo":3,"skipped":0,"started_at":1700000000000000,"state":"completed","updated_at":1700000001000000,"worker_index":3}
+===== worker_4.json
+{"assigned":1,"duration_s":1.0,"errors":0,"processed":1,"rank_hi":5,"rank_lo":4,"skipped":0,"started_at":1700000000000000,"state":"completed","updated_at":1700000001000000,"worker_index":4}
+===== worker_5.json
+{"assigned":1,"duration_s":1.0,"errors":0,"processed":1,"rank_hi":6,"rank_lo":5,"skipped":0,"started_at":1700000000000000,"state":"completed","updated_at":1700000001000000,"worker_index":5}
+===== worker_6.json
+{"assigned":1,"duration_s":1.0,"errors":0,"processed":1,"rank_hi":7,"rank_lo":6,"skipped":0,"started_at":1700000000000000,"state":"completed","updated_at":1700000001000000,"worker_index":6}
+===== worker_7.json
+{"assigned":1,"duration_s":1.0,"errors":0,"processed":1,"rank_hi":8,"rank_lo":7,"skipped":0,"started_at":1700000000000000,"state":"completed","updated_at":1700000001000000,"worker_index":7}

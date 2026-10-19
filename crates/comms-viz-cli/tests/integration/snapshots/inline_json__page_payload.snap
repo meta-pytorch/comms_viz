@@ -1,0 +1,314 @@
+---
+source: crates/comms-viz-cli/tests/integration/page.rs
+expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
+---
+{
+  "artifact_index": {},
+  "bd_preview": null,
+  "breakdown": {
+    "t": "plain",
+    "v": "all_gather_total,all_reduce_total,all_to_all_total,comm_total,comp_total,cp_all_gather_total,cp_all_reduce_total,cp_all_to_all_total,cp_reduce_scatter_total,cudaEventSynchronize_total,cudaHostAlloc_total,cudaLaunchKernel_total,cudaStreamSynchronize_total,default_pg_all_gather_total,default_pg_all_reduce_total,default_pg_all_to_all_total,default_pg_reduce_scatter_total,dp_replicate_all_gather_total,dp_replicate_all_reduce_total,dp_replicate_all_to_all_total,dp_replicate_reduce_scatter_total,dp_shard_all_gather_total,dp_shard_all_reduce_total,dp_shard_all_to_all_total,dp_shard_reduce_scatter_total,ep_all_gather_total,ep_all_reduce_total,ep_all_to_all_total,ep_reduce_scatter_total,rank,reduce_scatter_total,total_duration,tp_all_gather_total,tp_all_reduce_total,tp_all_to_all_total,tp_reduce_scatter_total\n10372.0,14794.0,0.0,36296.0,30265.0,1989.0,1855.0,0.0,2055.0,373.0,423.0,374.0,471.0,1800.0,3245.0,0.0,822.0,2316.0,2539.0,0.0,1153.0,1506.0,3880.0,0.0,741.0,1144.0,1417.0,0.0,3545.0,0,11130.0,9712.0,1617.0,1858.0,0.0,2814.0\n12626.0,11195.0,0.0,38513.0,30149.0,1684.0,768.0,0.0,4217.0,377.0,544.0,404.0,435.0,1985.0,2093.0,0.0,2792.0,1423.0,1834.0,0.0,3323.0,1777.0,2799.0,0.0,1482.0,2403.0,2031.0,0.0,1319.0,1,14692.0,8971.0,3354.0,1670.0,0.0,1559.0\n9065.0,13232.0,0.0,37049.0,29620.0,862.0,1934.0,0.0,3153.0,427.0,408.0,493.0,462.0,1784.0,1858.0,0.0,2298.0,1059.0,2580.0,0.0,2645.0,2270.0,2449.0,0.0,1937.0,1032.0,1646.0,0.0,2617.0,2,14752.0,9478.0,2058.0,2765.0,0.0,2102.0\n11929.0,11070.0,0.0,35874.0,30483.0,1593.0,2516.0,0.0,2706.0,354.0,406.0,544.0,371.0,1908.0,2341.0,0.0,1802.0,2182.0,1479.0,0.0,1467.0,2197.0,1843.0,0.0,2557.0,1621.0,1982.0,0.0,2357.0,3,12875.0,9547.0,2428.0,909.0,0.0,1986.0\n"
+  },
+  "config": {
+    "engine": {
+      "name": "comms_viz",
+      "rev": "[GIT_REV]",
+      "version": "0.1.0"
+    },
+    "result_dir": "results",
+    "run_id": "local-run",
+    "trace_format": "json",
+    "trace_root": "/fixtures/inline/step_000000000106",
+    "worker_count": 4,
+    "world_size": 4
+  },
+  "data_name": "comms_viz-local-run-step_106.pgdata",
+  "data_shards": null,
+  "default_group": "cp_3",
+  "generated_at_s": "[TS]",
+  "metadata": {
+    "capture": {
+      "clock_origin_unit": "ns",
+      "id": "[\"\",\"/fixtures/inline/step_000000000106\",\"local-run\"]",
+      "pg_scope": [
+        "capture.id",
+        "replica_id",
+        "pg_id"
+      ],
+      "rank_clock_origins_ns": {
+        "0": null,
+        "1": null,
+        "2": null,
+        "3": null
+      },
+      "run_id": "local-run",
+      "run_name": "",
+      "step": 106,
+      "timestamp_unit": "us",
+      "trace_root": "/fixtures/inline/step_000000000106"
+    },
+    "config": {
+      "run_name": "",
+      "trace_folder_path": "/fixtures/inline/step_000000000106",
+      "world_size": 4
+    },
+    "environment": [],
+    "pg_info": {
+      "groups": {
+        "cp": {
+          "alias": "cp",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_cp"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        },
+        "default_pg": {
+          "alias": "default_pg",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "default_pg"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        },
+        "dp_replicate": {
+          "alias": "dp_replicate",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_dp_replicate"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        },
+        "dp_shard": {
+          "alias": "dp_shard",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_dp_shard"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        },
+        "ep": {
+          "alias": "ep",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_ep"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        },
+        "tp": {
+          "alias": "tp",
+          "backend_configs": [
+            "cuda:nccl"
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_tp"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        }
+      },
+      "replica_size": null,
+      "shuffle_piggyback": null,
+      "valid_pgs": [
+        "cp",
+        "default_pg",
+        "dp_replicate",
+        "dp_shard",
+        "ep",
+        "tp"
+      ]
+    }
+  },
+  "per_pg": [
+    [
+      "cp_3",
+      "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"
+    ]
+  ],
+  "pg_base": 0,
+  "pg_index": [
+    [
+      "cp",
+      [
+        3,
+        2477
+      ]
+    ],
+    [
+      "default_pg",
+      [
+        0,
+        2487
+      ]
+    ],
+    [
+      "diagnostics",
+      [
+        0,
+        314
+      ]
+    ],
+    [
+      "dp_replicate",
+      [
+        5,
+        2490
+      ]
+    ],
+    [
+      "dp_shard",
+      [
+        1,
+        2612
+      ]
+    ],
+    [
+      "ep",
+      [
+        4,
+        2476
+      ]
+    ],
+    [
+      "tp",
+      [
+        2,
+        2569
+      ]
+    ]
+  ],
+  "pg_summary": [
+    {
+      "alias": "cp",
+      "count": 1,
+      "key": "cp",
+      "size": 4
+    },
+    {
+      "alias": "default_pg",
+      "count": 1,
+      "key": "default_pg",
+      "size": 4
+    },
+    {
+      "alias": "dp_replicate",
+      "count": 1,
+      "key": "dp_replicate",
+      "size": 4
+    },
+    {
+      "alias": "dp_shard",
+      "count": 1,
+      "key": "dp_shard",
+      "size": 4
+    },
+    {
+      "alias": "ep",
+      "count": 1,
+      "key": "ep",
+      "size": 4
+    },
+    {
+      "alias": "tp",
+      "count": 1,
+      "key": "tp",
+      "size": 4
+    }
+  ],
+  "rank_map": {
+    "t": "plain",
+    "v": "{\"hosts\":[],\"runs\":[[0,4,-1,0]],\"sfx\":[[\"#\",\".\",\".pt.trace.json.gz\",\"1700000000000\"]],\"tok\":[0,0,0,0],\"v\":1}"
+  },
+  "repaired_traces_dir": "[TMP]/tree/local-run/traces/",
+  "run": {
+    "completed_at": 1700000001000000,
+    "error": null,
+    "run_id": "local-run",
+    "run_name": "",
+    "started_at": 1700000000000000,
+    "status": 4,
+    "total_ranks": 4
+  },
+  "run_id": "local-run",
+  "status": {
+    "elapsed_s": 1.0,
+    "phase": "completed",
+    "phases": {
+      "aggregation": {
+        "completed_at": 1700000001000000,
+        "duration_s": 0.0,
+        "started_at": 1700000001000000,
+        "status": "completed"
+      },
+      "assign": {
+        "completed_at": 1700000000000000,
+        "duration_s": 0.0,
+        "started_at": 1700000000000000,
+        "status": "completed"
+      },
+      "claim": {
+        "completed_at": 1700000000000000,
+        "duration_s": 0.0,
+        "started_at": 1700000000000000,
+        "status": "completed"
+      },
+      "processing": {
+        "completed_at": 1700000001000000,
+        "duration_s": 1.0,
+        "started_at": 1700000000000000,
+        "status": "completed"
+      }
+    },
+    "ranks": {
+      "processed": 4,
+      "total": 4
+    },
+    "run_id": "local-run",
+    "shard_count": 4,
+    "shards": {
+      "completed": 4,
+      "failed": 0,
+      "in_flight": 0,
+      "pending": 0
+    },
+    "version": 2,
+    "workers_active": 0,
+    "workers_done": 4
+  },
+  "warnings": [
+    "No collective kernel carries a c10d sequence number, so no collective is matched across ranks: no imbalance, straggler or bandwidth statistics. PyTorch before 2.12 records none; some collectives (e.g. symm_mem ops) never have one."
+  ]
+}

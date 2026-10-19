@@ -1,0 +1,31 @@
+[package]
+name = "comms-viz-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+polars.workspace = true
+polars-core.workspace = true
+polars-io.workspace = true
+polars-parquet.workspace = true
+anyhow.workspace = true
+flate2.workspace = true
+libz-sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+simd-json.workspace = true
+tempfile.workspace = true
+regex.workspace = true
+rayon.workspace = true
+crossbeam-channel.workspace = true
+libdeflater.workspace = true
+memchr = "2"
+# splice writer: fix-pass float ts literals must match serde_json's (ryu).
+ryu = "1"
+libc = "0.2"
+# memgate purge-on-backoff: raw mallctl into the same jemalloc the cli
+# binary installs as global allocator (no-op elsewhere).
+tikv-jemalloc-sys.workspace = true
+aho-corasick = "1"
+rustc-hash = "2"

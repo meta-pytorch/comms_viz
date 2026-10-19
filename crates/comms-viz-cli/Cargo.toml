@@ -1,0 +1,33 @@
+[package]
+name = "comms-viz-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "comms_viz"
+
+[[bin]]
+name = "comms_viz"
+path = "src/main.rs"
+
+[dependencies]
+rayon.workspace = true
+comms-viz-core = { path = "../comms-viz-core" }
+anyhow.workspace = true
+clap.workspace = true
+flate2.workspace = true
+libdeflater.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tikv-jemallocator.workspace = true
+crossbeam-channel.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Integration suite (tests/integration): snapshot testing over the vendored
+# testdata/traces fixtures — insta pins analysis artifacts + rendered HTML,
+# sha2 hashes the binary artifacts (parquet/gz) into the manifest snapshots,
+# polars decodes the per-PG parquet for readable schema snapshots.
+insta = { version = "1", features = ["filters"] }
+sha2 = "0.10"
+regex.workspace = true
+polars.workspace = true

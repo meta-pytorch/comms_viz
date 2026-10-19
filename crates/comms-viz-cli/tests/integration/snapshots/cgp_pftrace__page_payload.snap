@@ -1,0 +1,314 @@
+---
+source: crates/comms-viz-cli/tests/integration/page.rs
+expression: "serde_json::to_string_pretty(&p).expect(\"payload pretty\")"
+---
+{
+  "artifact_index": {},
+  "bd_preview": null,
+  "breakdown": {
+    "t": "plain",
+    "v": "all_gather_total,all_reduce_total,all_to_all_total,comm_total,comp_total,cp_all_gather_total,cp_all_reduce_total,cp_all_to_all_total,cp_reduce_scatter_total,cudaEventSynchronize_total,cudaHostAlloc_total,cudaLaunchKernel_total,cudaStreamSynchronize_total,default_pg_all_gather_total,default_pg_all_reduce_total,default_pg_all_to_all_total,default_pg_reduce_scatter_total,dp_replicate_all_gather_total,dp_replicate_all_reduce_total,dp_replicate_all_to_all_total,dp_replicate_reduce_scatter_total,dp_shard_all_gather_total,dp_shard_all_reduce_total,dp_shard_all_to_all_total,dp_shard_reduce_scatter_total,ep_all_gather_total,ep_all_reduce_total,ep_all_to_all_total,ep_reduce_scatter_total,rank,reduce_scatter_total,total_duration,tp_all_gather_total,tp_all_reduce_total,tp_all_to_all_total,tp_reduce_scatter_total\n10372.0,14794.0,0.0,36296.0,30265.0,1989.0,1855.0,0.0,2055.0,318.20000000000005,367.664,302.672,405.448,1800.0,3245.0,0.0,822.0,2316.0,2539.0,0.0,1153.0,1506.0,3880.0,0.0,741.0,1144.0,1417.0,0.0,3545.0,0,11130.0,9712.0,1617.0,1858.0,0.0,2814.0\n12626.0,11195.0,0.0,38513.0,30149.0,1684.0,768.0,0.0,4217.0,313.456,370.576,323.784,357.15200000000004,1985.0,2093.0,0.0,2792.0,1423.0,1834.0,0.0,3323.0,1777.0,2799.0,0.0,1482.0,2403.0,2031.0,0.0,1319.0,1,14692.0,8971.0,3354.0,1670.0,0.0,1559.0\n9065.0,13232.0,0.0,37049.0,29620.0,862.0,1934.0,0.0,3153.0,352.816,360.41599999999994,353.48799999999994,379.0,1784.0,1858.0,0.0,2298.0,1059.0,2580.0,0.0,2645.0,2270.0,2449.0,0.0,1937.0,1032.0,1646.0,0.0,2617.0,2,14752.0,9478.0,2058.0,2765.0,0.0,2102.0\n11929.0,11070.0,0.0,35874.0,30483.0,1593.0,2516.0,0.0,2706.0,270.30400000000003,323.15999999999997,450.384,310.864,1908.0,2341.0,0.0,1802.0,2182.0,1479.0,0.0,1467.0,2197.0,1843.0,0.0,2557.0,1621.0,1982.0,0.0,2357.0,3,12875.0,9547.0,2428.0,909.0,0.0,1986.0\n"
+  },
+  "config": {
+    "engine": {
+      "name": "comms_viz",
+      "rev": "[GIT_REV]",
+      "version": "0.1.0"
+    },
+    "result_dir": "results",
+    "run_id": "local-run",
+    "trace_format": "pftrace",
+    "trace_root": "/fixtures/cgp-pftrace/step_000000000106",
+    "worker_count": 4,
+    "world_size": 4
+  },
+  "data_name": "comms_viz-local-run-step_106.pgdata",
+  "data_shards": null,
+  "default_group": "cp_3",
+  "generated_at_s": "[TS]",
+  "metadata": {
+    "capture": {
+      "clock_origin_unit": "ns",
+      "id": "[\"\",\"/fixtures/cgp-pftrace/step_000000000106\",\"local-run\"]",
+      "pg_scope": [
+        "capture.id",
+        "replica_id",
+        "pg_id"
+      ],
+      "rank_clock_origins_ns": {
+        "0": null,
+        "1": null,
+        "2": null,
+        "3": null
+      },
+      "run_id": "local-run",
+      "run_name": "",
+      "step": 106,
+      "timestamp_unit": "us",
+      "trace_root": "/fixtures/cgp-pftrace/step_000000000106"
+    },
+    "config": {
+      "run_name": "",
+      "trace_folder_path": "/fixtures/cgp-pftrace/step_000000000106",
+      "world_size": 4
+    },
+    "environment": [],
+    "pg_info": {
+      "groups": {
+        "cp": {
+          "alias": "cp",
+          "backend_configs": [
+            ""
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_cp"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        },
+        "default_pg": {
+          "alias": "default_pg",
+          "backend_configs": [
+            ""
+          ],
+          "count": 1,
+          "pg_descs": [
+            "default_pg"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        },
+        "dp_replicate": {
+          "alias": "dp_replicate",
+          "backend_configs": [
+            ""
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_dp_replicate"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        },
+        "dp_shard": {
+          "alias": "dp_shard",
+          "backend_configs": [
+            ""
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_dp_shard"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        },
+        "ep": {
+          "alias": "ep",
+          "backend_configs": [
+            ""
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_ep"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        },
+        "tp": {
+          "alias": "tp",
+          "backend_configs": [
+            ""
+          ],
+          "count": 1,
+          "pg_descs": [
+            "mesh_tp"
+          ],
+          "pg_sizes": [
+            4
+          ],
+          "size": 4
+        }
+      },
+      "replica_size": null,
+      "shuffle_piggyback": null,
+      "valid_pgs": [
+        "cp",
+        "default_pg",
+        "dp_replicate",
+        "dp_shard",
+        "ep",
+        "tp"
+      ]
+    }
+  },
+  "per_pg": [
+    [
+      "cp_3",
+      "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"
+    ]
+  ],
+  "pg_base": 0,
+  "pg_index": [
+    [
+      "cp",
+      [
+        3,
+        2508
+      ]
+    ],
+    [
+      "default_pg",
+      [
+        0,
+        2509
+      ]
+    ],
+    [
+      "diagnostics",
+      [
+        0,
+        318
+      ]
+    ],
+    [
+      "dp_replicate",
+      [
+        5,
+        2514
+      ]
+    ],
+    [
+      "dp_shard",
+      [
+        1,
+        2627
+      ]
+    ],
+    [
+      "ep",
+      [
+        4,
+        2504
+      ]
+    ],
+    [
+      "tp",
+      [
+        2,
+        2601
+      ]
+    ]
+  ],
+  "pg_summary": [
+    {
+      "alias": "cp",
+      "count": 1,
+      "key": "cp",
+      "size": 4
+    },
+    {
+      "alias": "default_pg",
+      "count": 1,
+      "key": "default_pg",
+      "size": 4
+    },
+    {
+      "alias": "dp_replicate",
+      "count": 1,
+      "key": "dp_replicate",
+      "size": 4
+    },
+    {
+      "alias": "dp_shard",
+      "count": 1,
+      "key": "dp_shard",
+      "size": 4
+    },
+    {
+      "alias": "ep",
+      "count": 1,
+      "key": "ep",
+      "size": 4
+    },
+    {
+      "alias": "tp",
+      "count": 1,
+      "key": "tp",
+      "size": 4
+    }
+  ],
+  "rank_map": {
+    "t": "plain",
+    "v": "{\"hosts\":[],\"runs\":[[0,4,-1,0]],\"sfx\":[[\"#\",\".\",\".pt.trace.pftrace.gz\",\"1700000000000\"]],\"tok\":[0,0,0,0],\"v\":1}"
+  },
+  "repaired_traces_dir": "[TMP]/tree/local-run/traces/",
+  "run": {
+    "completed_at": 1700000001000000,
+    "error": null,
+    "run_id": "local-run",
+    "run_name": "",
+    "started_at": 1700000000000000,
+    "status": 4,
+    "total_ranks": 4
+  },
+  "run_id": "local-run",
+  "status": {
+    "elapsed_s": 1.0,
+    "phase": "completed",
+    "phases": {
+      "aggregation": {
+        "completed_at": 1700000001000000,
+        "duration_s": 0.0,
+        "started_at": 1700000001000000,
+        "status": "completed"
+      },
+      "assign": {
+        "completed_at": 1700000000000000,
+        "duration_s": 0.0,
+        "started_at": 1700000000000000,
+        "status": "completed"
+      },
+      "claim": {
+        "completed_at": 1700000000000000,
+        "duration_s": 0.0,
+        "started_at": 1700000000000000,
+        "status": "completed"
+      },
+      "processing": {
+        "completed_at": 1700000001000000,
+        "duration_s": 1.0,
+        "started_at": 1700000000000000,
+        "status": "completed"
+      }
+    },
+    "ranks": {
+      "processed": 4,
+      "total": 4
+    },
+    "run_id": "local-run",
+    "shard_count": 4,
+    "shards": {
+      "completed": 4,
+      "failed": 0,
+      "in_flight": 0,
+      "pending": 0
+    },
+    "version": 2,
+    "workers_active": 0,
+    "workers_done": 4
+  },
+  "warnings": [
+    "No collective kernel carries a c10d sequence number, so no collective is matched across ranks: no imbalance, straggler or bandwidth statistics. PyTorch before 2.12 records none; some collectives (e.g. symm_mem ops) never have one."
+  ]
+}

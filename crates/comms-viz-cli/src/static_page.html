@@ -1,0 +1,2745 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__COMMS_VIZ_TITLE__</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb; --page: #f9f9f7;
+  --ink-1: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --zebra: rgba(11,11,11,0.035);
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+  --s5:#e87ba4; --s6:#008300; --s7:#4a3aa7; --s8:#e34948;
+  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+  --other:#898781;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1: #1a1a19; --page: #0d0d0d;
+    --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-3: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --zebra: rgba(255,255,255,0.05);
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+    --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19; --page: #0d0d0d;
+  --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-3: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --zebra: rgba(255,255,255,0.05);
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+  --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+}
+* { box-sizing: border-box; }
+/* Two-finger chart pans leak horizontal overscroll — never back/forward-swipe. */
+html, body { overscroll-behavior-x: none; }
+body {
+  margin: 0; background: var(--page); color: var(--ink-1);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+a { color: var(--s1); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.hdr { padding: 14px 20px 10px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.hdr h1 { font-size: 17px; margin: 0; font-weight: 650; }
+.hdr .sub { color: var(--ink-2); font-size: 12px; }
+.hdr .spacer { flex: 1; }
+.pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 11px;
+        font-weight: 600; border: 1px solid var(--border); }
+.pill.good { color: var(--good); } .pill.blue { color: var(--s1); }
+.pill.crit { color: var(--critical); } .pill.warn { color: var(--warning); }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 5px; font-size: 11px;
+        border: 1px solid var(--border); color: var(--ink-2); }
+.layout { padding: 0 20px 30px; }
+.shell { display: flex; }
+.content { flex: 1; min-width: 0; }
+.sidenav { width: 280px; flex: none; position: sticky; top: 0; height: 100vh;
+  overflow-y: auto; overflow-x: hidden; background: var(--surface-1);
+  border-right: 1px solid var(--border); padding: 12px;
+  display: flex; flex-direction: column; gap: 10px; }
+.sn-head { display: flex; align-items: center; gap: 8px; }
+.sn-head .spacer { flex: 1; }
+.sn-brand { display: flex; align-items: center; gap: 8px; color: var(--ink-1);
+  font-size: 15px; font-weight: 650; min-width: 0; }
+.sn-logo { width: 26px; height: 26px; border-radius: 8px; flex: none;
+  background: rgba(42,120,214,.16); color: var(--s1); font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center; }
+.sn-sect { font-size: 11px; font-weight: 650; color: var(--ink-2); margin-top: 2px; }
+.sn-item, .sn-run { display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+  border-radius: 6px; font-size: 12px; color: var(--ink-2); }
+a.sn-item:hover, a.sn-run:hover { text-decoration: none; background: rgba(137,135,129,.16); }
+.sn-run.on { background: rgba(42,120,214,.12); color: var(--s1); font-weight: 600; }
+.sn-run .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sn-run .when { margin-left: auto; flex: none; font-size: 10px; color: var(--ink-3); }
+.sn-list { display: flex; flex-direction: column; gap: 2px; max-height: 300px;
+  overflow-y: auto; }
+.sn-note { font-size: 11px; color: var(--ink-3); padding: 2px 8px; }
+.sn-div { border-top: 1px solid var(--border); }
+.shell.snav-off .sidenav { width: 42px; padding: 12px 8px; cursor: pointer; }
+.shell.snav-off .sidenav > :not(.sn-head), .shell.snav-off .sn-name { display: none; }
+.shell.snav-off .sn-head { flex-direction: column; gap: 10px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+        padding: 12px 14px; }
+.card h2 { font-size: 13px; margin: 0 0 8px; font-weight: 650; }
+.card h3 { font-size: 12px; margin: 12px 0 6px; font-weight: 650; color: var(--ink-2); }
+.kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 2px 0; }
+.kv .k { color: var(--ink-2); flex: none; }
+.kv .v { text-align: right; overflow-wrap: anywhere; }
+/* Click-to-copy. The glyph is reserved at opacity 0 so revealing it on
+   hover never reflows the value it sits next to. */
+.copy { cursor: pointer; border-radius: 4px; }
+.copy:hover { background: rgba(137,135,129,.18); }
+.copy:focus-visible { outline: 1px solid var(--s1); outline-offset: 1px; }
+.copy:not(.icon)::after { content: "⧉"; margin-left: 5px; font-size: 11px;
+  color: var(--ink-3); opacity: 0; }
+.copy:not(.icon):hover::after, .copy:not(.icon):focus-visible::after { opacity: .75; }
+.copy.icon { flex: none; color: var(--ink-3); font-size: 11px; padding: 0 3px; opacity: .4; }
+.host:hover .copy.icon, .copy.icon:hover, .copy.icon:focus-visible { opacity: 1; }
+.copytip { position: fixed; z-index: 90; transform: translate(-50%,-100%);
+  background: var(--ink-1); color: var(--page); font-size: 11px; font-weight: 650;
+  padding: 2px 7px; border-radius: 5px; pointer-events: none; white-space: nowrap;
+  animation: copytip .9s ease-out forwards; }
+@keyframes copytip {
+  0% { opacity: 0; transform: translate(-50%,-100%); }
+  12% { opacity: 1; transform: translate(-50%,-100%); }
+  70% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%,-150%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .copytip { animation: copyfade .9s linear forwards; }
+  @keyframes copyfade { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
+}
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
+.tabs button { border: 1px solid var(--border); background: var(--surface-1); color: var(--ink-2);
+  padding: 6px 14px; border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer; }
+.tabs button.on { color: var(--ink-1); font-weight: 650; border-color: var(--s1); }
+section.tab { display: none; }
+section.tab.on { display: block; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+table.data { border-collapse: collapse; width: 100%; font-size: 12px; }
+table.data th { text-align: right; color: var(--ink-2); font-weight: 600; padding: 5px 8px;
+  border-bottom: 1px solid var(--axis); cursor: pointer; white-space: nowrap; user-select: none; }
+table.data th:first-child, table.data td:first-child { text-align: left; }
+table.data td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.data td.txt { text-align: left; font-variant-numeric: normal; }
+table.data td.rlink { cursor: pointer; color: var(--s1); }
+.pager { display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--ink-2);
+  margin-top: 8px; }
+button.btn { border: 1px solid var(--border); background: var(--surface-1); color: var(--ink-1);
+  padding: 4px 10px; border-radius: 6px; font: inherit; font-size: 12px; cursor: pointer; }
+button.btn:disabled { opacity: .4; cursor: default; }
+button.btn.primary { border-color: var(--s1); color: var(--s1); }
+input[type=text], select { border: 1px solid var(--border); background: var(--surface-1);
+  color: var(--ink-1); padding: 4px 8px; border-radius: 6px; font: inherit; font-size: 12px; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2);
+  margin: 6px 0; min-height: 18px; /* reserved: filling in post-paint must not shift the chart */ }
+.legend .it { display: inline-flex; gap: 5px; align-items: center; }
+.sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.cats { display: flex; gap: 8px 14px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
+.cats label { display: inline-flex; gap: 5px; align-items: center; cursor: pointer;
+  color: var(--ink-2); }
+.chartwrap { position: relative; }
+.chartwrap canvas { width: 100%; display: block; border: 1px solid var(--grid);
+  border-radius: 6px; background: var(--surface-1); }
+.chartnote { position: absolute; top: 10px; right: 14px; z-index: 4; pointer-events: none;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px;
+  padding: 3px 10px; font-size: 12px; color: var(--ink-2); opacity: .92; max-width: 60%; }
+.tcursor { position: absolute; z-index: 3; pointer-events: none; display: none;
+  width: 1px; background: var(--ink-2); opacity: .7; }
+.zoomband { position: absolute; z-index: 3; pointer-events: none; display: none;
+  background: rgba(42,120,214,.14);
+  border-left: 1px solid var(--s1); border-right: 1px solid var(--s1); }
+/* Fixed, not absolute: the card floats over the page in viewport coordinates
+   so the parallelism wrap's scroll box cannot clip it. */
+.tt { position: fixed; pointer-events: none; background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 12px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.18); display: none; z-index: 40; max-width: 340px;
+  overflow-wrap: anywhere; }
+.tt .t { font-weight: 650; margin-bottom: 3px; }
+.tt .r { display: flex; gap: 8px; justify-content: space-between; }
+.tt .r .n { color: var(--ink-2); }
+.tt .r .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+.tt .sep { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--border);
+  color: var(--ink-3); font-size: 11px; }
+.tt .r .v.hot { color: var(--critical); }
+.info { margin-left: 4px; color: var(--ink-3); cursor: help; font-weight: 400; }
+.info:hover { color: var(--s1); }
+.tt.infotip { font-weight: 400; white-space: pre-line; }
+.hostgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr));
+  gap: 10px; margin-top: 10px; }
+.host { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.host .hh { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 12px; }
+.host .hh .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host .cnt { color: var(--ink-3); } .host .cnt.full { color: var(--good); }
+.ranks { display: grid; gap: 4px; margin-top: 8px; }
+.rk { border: 1px solid var(--border); border-radius: 4px; text-align: center; padding: 2px 0;
+  font-family: ui-monospace, monospace; font-size: 11px; color: var(--ink-1); background: none; cursor: pointer; }
+.rk.off { opacity: .3; cursor: default; }
+.rk.pg { padding: 2px 6px; }
+.rk.hit { border-color: var(--s1); font-weight: 700; }
+details.node { margin-left: 16px; }
+details.node > summary { cursor: pointer; font-size: 12px; padding: 1px 0; }
+.tbadge { font-size: 10px; font-weight: 650; color: var(--ink-3); margin-right: 5px; }
+.note { font-size: 12px; color: var(--ink-2); margin: 6px 0; }
+.warnbox { border-left: 3px solid var(--warning); padding: 4px 10px; font-size: 12px;
+  color: var(--ink-2); margin: 8px 0; }
+.loadbox { position: relative; overflow: hidden; border: 1px solid var(--border);
+  border-left: 3px solid var(--s1); padding: 8px 12px; font-size: 13px;
+  font-weight: 650; color: var(--ink-1); margin: 8px 0; background: var(--surface-1); }
+.loadbox .bar { position: absolute; inset: 0; width: 0%; background: var(--s1);
+  opacity: 0.12; transition: width 0.15s linear; }
+.loadbox .bar.busy { width: 40%; animation: loadslide 1.1s ease-in-out infinite alternate; }
+@keyframes loadslide { from { transform: translateX(-30%); } to { transform: translateX(250%); } }
+.footer { padding: 10px 20px 26px; font-size: 11px; color: var(--ink-3); }
+.cfg { max-height: 420px; overflow: auto; }
+.searchout { font-size: 12px; margin-top: 8px; }
+.searchout .hd { font-weight: 650; margin-top: 8px; }
+.rankbtns { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.ta { position: relative; display: inline-block; }
+.talist { position: absolute; left: 0; top: calc(100% + 4px); min-width: 100%; max-height: 300px;
+  overflow-y: auto; background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.18); z-index: 6; }
+.talist .it { padding: 4px 10px; cursor: pointer; white-space: nowrap; font-size: 12px;
+  font-family: ui-monospace, monospace; }
+.talist .it.on { background: rgba(42,120,214,.12); }
+.talist .it b { color: var(--s1); font-weight: 700; }
+.talist .more { padding: 4px 10px; color: var(--ink-3); font-size: 11px; }
+</style>
+</head>
+<body>
+<!-- Byte order is paint order: the skeleton markup streams first and
+     paints immediately; the data island and script follow; the pg_map
+     island (the only payload that scales with world size) is last and is
+     parsed lazily, off the paint path. -->
+<div class="shell" id="shell">
+<nav class="sidenav" id="sidenav" aria-label="Run navigation">
+  <div class="sn-head">
+    <span class="sn-brand">
+      <span class="sn-logo">c</span><span class="sn-name">comms_viz</span></span>
+    <span class="spacer"></span>
+    <button class="btn" id="sn-toggle" title="Collapse sidebar">«</button>
+  </div>
+  <div class="sn-div"></div>
+  <div class="sn-sect">Job Metadata</div>
+  <div id="meta-rows"></div>
+  <div class="sn-div"></div>
+  <div class="sn-sect">Parallelism Degree</div>
+  <div id="pg-rows"></div>
+  <div class="sn-div"></div>
+  <div class="sn-sect">Process Group Info Calculator</div>
+  <div>
+    <input type="text" id="pg-q" placeholder="pp0, tp2, rank #, hostname..." style="width:100%">
+    <div class="searchout" id="pg-out"></div>
+  </div>
+</nav>
+<div class="content">
+<div class="hdr">
+  <h1 id="h-title"></h1>
+  <span id="h-status"></span>
+  <span id="h-engine"></span>
+  <span class="sub mono" id="h-runid"></span>
+  <span class="spacer"></span>
+  <button class="btn" id="themebtn" title="Toggle light/dark">◐</button>
+</div>
+<div class="layout">
+  <main>
+    <div id="run-warnings"></div>
+    <nav class="tabs" id="tabs"></nav>
+    <section class="tab" id="tab-breakdown">
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <h2 style="margin:0">Breakdown Analysis</h2>
+          <div class="row">
+            <span class="note">Click a rank to show its PGs in sidebar · drag, pinch or w/s to zoom · scroll or a/d to pan · double-click or Reset to clear</span>
+            <button class="btn" id="bd-reset">Reset Zoom</button>
+            <label class="note">Percentile
+              <select id="bd-pct"><option value="">None</option><option>10</option>
+              <option>50</option><option>75</option><option>90</option><option>95</option></select>
+            </label>
+            <button class="btn" id="bd-table-btn">Show Table</button>
+          </div>
+        </div>
+        <div class="legend" id="bd-legend"></div>
+        <div class="chartwrap"><canvas id="bd-canvas" height="500"></canvas><div class="tt" id="bd-tt"></div></div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn" id="bd-all">All</button>
+          <button class="btn" id="bd-clear">Clear</button>
+          <span class="note">series that are zero on every rank are left out — the table always has every column</span>
+        </div>
+        <div class="cats" id="bd-cats"></div>
+        <div id="bd-table" style="display:none; margin-top:12px"></div>
+      </div>
+    </section>
+    <section class="tab" id="tab-parallelism">
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <h2 style="margin:0">Parallelism Timeline</h2>
+          <div class="row">
+            <span class="note">Group <span class="ta">
+              <input type="text" id="pl-group" autocomplete="off" spellcheck="false"
+                     placeholder="group" style="width:170px">
+              <div class="talist" id="pl-group-list" style="display:none"></div></span></span>
+            <span class="note" id="pl-hint">Drag, pinch or w/s to zoom · scroll or a/d to pan · double-click or Reset to clear · hover a collective to highlight its peers</span>
+            <button class="btn" id="pl-reset">Reset Zoom</button>
+          </div>
+        </div>
+        <div id="pl-status"></div>
+        <div class="kv"><span class="k">Time origin (t=0):</span>
+          <span class="v mono" id="pl-t0"></span></div>
+        <div class="kv" id="pl-steps-row" style="display:none"><span class="k">Profiled steps (all shown):</span>
+          <span class="v mono" id="pl-steps"></span></div>
+        <div class="legend" id="pl-legend"></div>
+        <div class="chartwrap" id="pl-wrap" style="max-height:800px; overflow-y:auto">
+          <div id="pl-spacer"><canvas id="pl-canvas" style="position:sticky; top:0"></canvas></div>
+          <div class="tt" id="pl-tt"></div></div>
+        <div class="note" id="pl-note"></div>
+        <h3><label><input type="checkbox" id="pl-imb-toggle"> Show Imbalance Table</label></h3>
+        <div id="pl-imb" style="display:none"></div>
+        <h3 id="pl-straggler-control" style="display:none"><label>
+          <input type="checkbox" id="pl-straggler-toggle"> Show Collective Arrival Summary</label></h3>
+        <div id="pl-stragglers" style="display:none">
+          <div id="pl-straggler-table"></div>
+        </div>
+        <h3 id="pl-activity-control" style="display:none"><label>
+          <input type="checkbox" id="pl-activity-toggle"> Show GPU/CPU Utilization</label></h3>
+        <div id="pl-activity" style="display:none">
+          <div id="pl-activity-table"></div>
+        </div>
+        <h3 id="pl-pm-control" style="display:none"><label>
+          <input type="checkbox" id="pl-pm-toggle"> Show GPU Counters</label></h3>
+        <div id="pl-pm" style="display:none">
+          <div class="note">One track per rank of the selected group, over the timeline's full time range. Each rank's samples of the chosen counter are split into time buckets, and each bucket shows the min, p50 and max of its samples, on one scale from 0 for all ranks; a bucket holds until the next one, so counters sampled less often (power, clocks) draw as steps. Click a bucket to sort the ranks by its max; click it again for its min, and a third time for rank order.</div>
+          <div class="cats" id="pl-pm-metrics"></div>
+          <div class="note" id="pl-pm-legend"></div>
+          <div class="chartwrap" id="pl-pm-wrap" style="display:none; max-height:600px; overflow-y:auto">
+            <div id="pl-pm-spacer"><canvas id="pl-pm-canvas" style="position:sticky; top:0"></canvas></div></div>
+        </div>
+      </div>
+    </section>
+    <section class="tab" id="tab-traces">
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <h2 style="margin:0">Collected Traces</h2>
+          <div class="row">
+            <input type="text" id="tr-q" placeholder="filter: pp0, rank #, hostname...">
+            <button class="btn" id="tr-expand">Expand all</button>
+            <span class="note" id="tr-count"></span>
+          </div>
+        </div>
+        <div class="hostgrid" id="tr-hosts"></div>
+        <div class="pager" id="tr-more"></div>
+      </div>
+    </section>
+    <section class="tab" id="tab-metadata">
+      <div class="card"><h2>Trace Paths</h2><div id="md-paths"></div></div>
+      <div class="card" style="margin-top:12px"><h2>Config</h2>
+        <div class="cfg" id="md-cfg"></div></div>
+      <div class="card" style="margin-top:12px"><h2>Engine</h2><div id="md-engine"></div></div>
+    </section>
+  </main>
+</div>
+<div class="footer" id="footer"></div>
+</div>
+</div>
+<script id="comms_viz-data" type="application/json">__COMMS_VIZ_DATA__</script>
+<script>
+"use strict";
+const RAW = JSON.parse(document.getElementById("comms_viz-data").textContent);
+const SLOTS = ["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8"];
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const loc = (n) => Math.round(n).toLocaleString("en-US");
+const fmtMicros = (us) => us ? new Date(us / 1000).toLocaleString() : "—";
+function fmtDuration(s) {
+  if (s < 1) return Math.round(s * 1000) + "ms";
+  if (s < 60) return s.toFixed(1) + "s";
+  if (s < 3600) return (s / 60).toFixed(1) + "m";
+  return (s / 3600).toFixed(1) + "h";
+}
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null) continue;
+    e.append(kid.nodeType ? kid : document.createTextNode(kid));
+  }
+  return e;
+}
+// --- click to copy -----------------------------------------------------------
+// Run ids, job names, hosts and paths are things people paste into tasks and
+// chats, so a click puts one on the clipboard instead of forcing a hand
+// selection. Anything carrying `data-copy` opts in; the listener is delegated
+// and runs in the capture phase so a copy target nested inside a clickable
+// element (a host name inside its expand/collapse header) copies without also
+// firing that element's handler.
+const NOT_COPYABLE = new Set(["", "—", "N/A"]);
+function markCopyable(node, text) {
+  if (!node || NOT_COPYABLE.has(String(text ?? "").trim())) return node;
+  node.classList.add("copy");
+  node.setAttribute("data-copy", text);
+  node.setAttribute("tabindex", "0");
+  node.setAttribute("role", "button");
+  node.setAttribute("title", `Copy ${text}`);
+  return node;
+}
+// A value span that copies itself. Falls back to a plain span for placeholder
+// values so "—" never advertises a clipboard action.
+function copySpan(text, cls) {
+  return markCopyable(el("span", cls ? { class: cls } : {}, text), text);
+}
+// An unobtrusive standalone button, for rows whose text cannot host the glyph
+// (the host name is ellipsized, so a trailing ⧉ would be clipped away).
+function copyIcon(text, label) {
+  const b = el("span", { class: "icon" }, "⧉");
+  markCopyable(b, text);
+  b.setAttribute("title", `Copy ${label || text}`);
+  return b;
+}
+async function writeClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fall through: permission denied or no async clipboard */ }
+  // Reports are also opened straight off disk, where the async clipboard is
+  // unavailable; the legacy path still works there.
+  const ta = el("textarea", { style: "position:fixed;top:-1000px;opacity:0", "aria-hidden": "true" });
+  ta.value = text;
+  document.body.append(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  ta.remove();
+  return ok;
+}
+function copyTip(node, msg) {
+  const tip = el("div", { class: "copytip" }, msg);
+  document.body.append(tip);
+  const r = node.getBoundingClientRect();
+  tip.style.left = `${r.left + r.width / 2}px`;
+  tip.style.top = `${r.top - 4}px`;
+  setTimeout(() => tip.remove(), 950);
+}
+async function runCopy(node) {
+  const text = node.getAttribute("data-copy");
+  copyTip(node, (await writeClipboard(text)) ? "Copied" : "Copy failed");
+}
+function copyTarget(e) {
+  const t = e.target;
+  if (!t || !t.closest) return null;
+  if (t.closest("a")) return null; // a link inside a value still navigates
+  return t.closest("[data-copy]");
+}
+function initCopy() {
+  const handle = (e) => {
+    const node = copyTarget(e);
+    if (!node) return;
+    e.preventDefault();
+    e.stopPropagation();
+    runCopy(node);
+  };
+  document.addEventListener("click", handle, true);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") handle(e);
+  }, true);
+}
+function b64Bytes(s) {
+  const bin = atob(s);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+async function decodeEnc(enc) {
+  if (!enc) return null;
+  if (enc.t === "plain") return enc.v;
+  const ds = new DecompressionStream("gzip");
+  return await new Response(new Blob([b64Bytes(enc.v)]).stream().pipeThrough(ds)).text();
+}
+function parseCsv(text) {
+  if (!text.includes('"')) {
+    const lines = text.split(/\r?\n/).filter((l) => l.length);
+    if (!lines.length) return { head: [], rows: [] };
+    return { head: lines[0].split(","), rows: lines.slice(1).map((l) => l.split(",")) };
+  }
+  // Original kernel names and PG IDs may contain commas, quotes or newlines.
+  const records = []; let row = [], field = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      if (quoted && text[i + 1] === '"') { field += '"'; i++; }
+      else quoted = !quoted;
+    } else if (!quoted && c === ",") { row.push(field); field = ""; }
+    else if (!quoted && (c === "\n" || c === "\r")) {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); records.push(row); row = []; field = "";
+    } else field += c;
+  }
+  if (field.length || row.length) { row.push(field); records.push(row); }
+  return { head: records.shift() || [], rows: records };
+}
+async function gunzipBytes(bytes) {
+  const ds = new DecompressionStream("gzip");
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer());
+}
+// Shard table: the publisher may split the sidecar into several adjacent
+// objects (`<data_name>`, `<data_name>.1`, …) to upload them in parallel;
+// data_shards carries each object's byte length. Cuts fall on member
+// boundaries and the artifact section never splits, so every fetch below
+// lives in exactly one shard. Absent → the single-object layout.
+const SHARDS = (() => {
+  const lens = RAW.data_shards;
+  if (!lens || lens.length < 2) return null;
+  let acc = 0;
+  return lens.map((len, i) => ({
+    start: (acc += len) - len, len,
+    name: i ? `${RAW.data_name}.${i}` : RAW.data_name,
+  }));
+})();
+// Range-fetch a slice of the data sidecar next to this page (`off` is a
+// logical offset — mapped to the shard object holding it). A server that
+// ignores Range answers 200 with the whole shard: slice it locally so the
+// page still works there. `onProgress(got)` fires per 256KB while a 206
+// body streams.
+// Whole sidecar shards from servers that ignore Range requests (e.g.
+// `python3 -m http.server` answers 200 with the full file): kept so each
+// shard is downloaded once per page load instead of once per group.
+const wholeShards = new Map();
+// The first request to each shard, which tells whether the server honors
+// Range; concurrent requests (the page fetches a group, the diagnostics and
+// the breakdown at once) wait for it rather than each downloading the shard.
+const shardProbes = new Map();
+async function fetchRange(off, len, onProgress) {
+  let name = RAW.data_name, local = off;
+  if (SHARDS) {
+    let s = SHARDS[0];
+    for (const t of SHARDS) { if (t.start <= off) s = t; else break; }
+    if (off + len > s.start + s.len)
+      throw new Error(`range ${off}+${len} spans sidecar shards`);
+    name = s.name; local = off - s.start;
+  }
+  if (shardProbes.has(name)) await shardProbes.get(name);
+  const whole = wholeShards.get(name);
+  if (whole) return (await whole).slice(local, local + len);
+  let probed;
+  if (!shardProbes.has(name)) shardProbes.set(name, new Promise((done) => { probed = done; }));
+  try {
+    return await fetchSidecar(name, local, len, onProgress);
+  } finally {
+    probed?.();
+  }
+}
+async function fetchSidecar(name, local, len, onProgress) {
+  const r = await fetch(new URL(name, location.href), {
+    headers: { Range: `bytes=${local}-${local + len - 1}` }, cache: "no-store" });
+  if (!r.ok) throw new Error(`sidecar fetch failed (HTTP ${r.status})`);
+  let bytes;
+  if (r.status === 206 && r.body) {
+    const reader = r.body.getReader();
+    const chunks = [];
+    let got = 0, drawn = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value); got += value.length;
+      if (onProgress && got - drawn > 262144) { // repaint every 256KB
+        drawn = got;
+        onProgress(got);
+      }
+    }
+    bytes = new Uint8Array(got);
+    let o = 0;
+    for (const c of chunks) { bytes.set(c, o); o += c.length; }
+  } else if (r.status === 200) {
+    const all = r.arrayBuffer().then((b) => new Uint8Array(b));
+    wholeShards.set(name, all);
+    bytes = (await all).slice(local, local + len);
+  } else {
+    bytes = new Uint8Array(await r.arrayBuffer());
+  }
+  return bytes;
+}
+// --- page artifacts (breakdown / rank_map) ----------------------------------
+// Each resolves to text: inline values decode in place; `{"t":"ref"}`
+// values live in the sidecar's artifact section — adjacent members at the
+// very start — and every referenced artifact is collected with a single
+// coalesced Range request the first time any of them is needed.
+let artsFetch = null;
+function fetchArtifacts() {
+  return artsFetch ||= (async () => {
+    const idx = RAW.artifact_index || {};
+    const keys = Object.keys(idx);
+    if (!keys.length || !RAW.data_name) return {};
+    const lo = Math.min(...keys.map((k) => idx[k][0]));
+    const hi = Math.max(...keys.map((k) => idx[k][0] + idx[k][1]));
+    const bytes = await fetchRange(lo, hi - lo, null);
+    const out = {};
+    for (const k of keys) {
+      const [off, len] = idx[k];
+      out[k] = new TextDecoder().decode(
+        await gunzipBytes(bytes.subarray(off - lo, off - lo + len)));
+    }
+    return out;
+  })();
+}
+const arts = {};
+function artifactText(key) {
+  return arts[key] ||= (async () => {
+    const e = RAW[key];
+    if (!e) return null;
+    if (e.t !== "ref") return decodeEnc(e);
+    return (await fetchArtifacts())[key] ?? null;
+  })();
+}
+// Decode a "DPG1" columnar sidecar member (see pg_encode.rs for the
+// format): returns { names, cols, nrows } with dict columns as strings
+// and num columns as numbers (n/scale — the same double `+field` yields).
+function decodeDpg(b) {
+  let p = 4;
+  // Varints can exceed 32 bits (scaled timestamps): accumulate with
+  // multiplies, never bitwise ops (those truncate to 32 bits).
+  const vu = () => { let v = 0, m = 1; for (;;) { const x = b[p++]; v += (x & 127) * m; if (x < 128) return v; m *= 128; } };
+  const td = new TextDecoder();
+  const str = () => { const n = vu(); const s = td.decode(b.subarray(p, p + n)); p += n; return s; };
+  const nrows = vu(), ncols = vu();
+  const names = [], kinds = [];
+  for (let c = 0; c < ncols; c++) {
+    names.push(str());
+    const ty = b[p++];
+    kinds.push({ ty, scale: ty === 1 ? vu() : 1 });
+  }
+  const cols = kinds.map(({ ty, scale }) => {
+    const v = new Array(nrows);
+    if (ty === 1) {
+      let acc = 0;
+      for (let r = 0; r < nrows; r++) { const z = vu(); acc += z % 2 ? -(z + 1) / 2 : z / 2; v[r] = acc / scale; }
+    } else {
+      const nu = vu(), uniq = new Array(nu);
+      for (let u = 0; u < nu; u++) uniq[u] = str();
+      for (let r = 0; r < nrows; r++) v[r] = uniq[vu()];
+    }
+    return v;
+  });
+  return { names, cols, nrows };
+}
+// Decode one inflated group-member payload — DPG1 (magic-sniffed) or the
+// raw-CSV fallback — into timeline events. Warm inline embeds and sidecar
+// range-fetches both land here, so the two paths are identical from the
+// payload on.
+function eventsFromMember(raw) {
+  const { names, get, nrows } = tableFromMember(raw);
+  return eventsFromTable(names, get, nrows);
+}
+function tableFromMember(raw) {
+  if (raw[0] === 68 && raw[1] === 80 && raw[2] === 71 && raw[3] === 49) { // "DPG1"
+    const { names, cols, nrows } = decodeDpg(raw);
+    return { names, get: (c, r) => cols[c][r], nrows };
+  }
+  const { head, rows } = parseCsv(new TextDecoder().decode(raw));
+  return { names: head, get: (c, r) => rows[r][c], nrows: rows.length };
+}
+// <events-from-table>
+// Shared timeline-event builder: `get(colIdx, row)` reads a cell (string
+// from CSV, string-or-number from DPG1 — coercions below make both paths
+// produce identical events).
+function eventsFromTable(names, get, nrows) {
+  const col = Object.fromEntries(names.map((h, i) => [h, i]));
+  const evs = new Array(nrows);
+  for (let r = 0; r < nrows; r++) {
+    const optional = (key) => col[key] == null ? null : (get(col[key], r) === "" || get(col[key], r) == null ? null : String(get(col[key], r)));
+    const operation = optional("operation"), src = optional("src_rank"), dst = optional("dst_rank");
+    const rawName = String(get(col.name, r));
+    const name = operation === "send" ? `Send → ${dst == null ? "rank unknown" : "rank " + dst}` :
+      operation === "recv" ? `Recv ← ${src == null ? "rank unknown" : "rank " + src}` :
+      /SendRecv/i.test(rawName) ? "SendRecv (direction unknown)" : rawName;
+    evs[r] = {
+      rank: +get(col.rank, r),
+      stream: col.stream != null ? String(get(col.stream, r)) : "default",
+      ts: +get(col.ts, r), dur: +get(col.dur, r), name,
+      colorName: operation === "send" ? "Send" : operation === "recv" ? "Recv" : name,
+      originalName: optional("original_name") || rawName,
+      operation, src, dst, pg: col.pg_name != null ? String(get(col.pg_name, r)) : "",
+      pgId: optional("pg_id"), replica: optional("replica_id"),
+      nelems: optional("msg_nelems"), dtype: optional("dtype"), sequence: optional("sequence_id"),
+      graph: optional("graph_id"), node: optional("node_id"), replay: optional("replay_id"),
+      // Artifacts from before the column existed held only kernels.
+      commKernel: col.comm_kernel == null || +get(col.comm_kernel, r) === 1,
+      kernel: col.kernel_name != null ? String(get(col.kernel_name, r)) : "",
+      collective: col.collective_name != null ? String(get(col.collective_name, r)) : "",
+      inN: col.in_nelems != null ? +get(col.in_nelems, r) : -1,
+      outN: col.out_nelems != null ? +get(col.out_nelems, r) : -1,
+      groupSize: col.group_size != null ? +get(col.group_size, r) : -1,
+      step: col.step != null && +get(col.step, r) >= 0 ? +get(col.step, r) : null,
+    };
+  }
+  return evs;
+}
+// </events-from-table>
+// --- run/status ------------------------------------------------------------
+const STATUS = { 0: ["Queued", "warn"], 1: ["Running", "blue"], 2: ["Analyzing", "blue"],
+  3: ["Aggregating", "blue"], 4: ["Completed", "good"], 5: ["Failed", "crit"] };
+const run = RAW.run || {}, cfg = RAW.config || {}, status = RAW.status || {};
+const md = RAW.metadata, mdConfig = md ? (md.config || {}) : {};
+document.getElementById("run-warnings").replaceChildren(
+  ...(RAW.warnings || []).map((w) => el("div", { class: "warnbox" }, "Warning: " + w)));
+const totalGpus = (md && (md.world_size ?? mdConfig.world_size)) ?? run.total_ranks ?? 0;
+const jobName = run.run_name || mdConfig.run_name || "";
+// --- PG util ---------------------------------------------------------------
+// First paint uses only the publisher's summary (alias/count/size per
+// PG); the rank lists live in the #comms_viz-pgmap island at the end of the
+// document and are parsed lazily, so paint cost never scales with world
+// size. pgm() materializes {PG, rankToGroups} on first use (idle-warmed
+// from boot).
+const pgInfo = md && md.pg_info ? md.pg_info : null;
+const PGS = {};       // key -> {alias,count,size,pg_sizes,pg_descs,backend_configs}
+for (const p of RAW.pg_summary || []) PGS[p.key] = p;
+const validPGs = Object.keys(PGS).filter((k) => PGS[k].size > 1).sort();
+let PGM = null, pgmPending = null;
+function buildPgm(pgMap) {
+  const PG = {};      // key -> {alias,count,size,groups:[[ranks]]}
+  for (const [key, v] of Object.entries(pgMap)) {
+    const g = (pgInfo && pgInfo.groups && pgInfo.groups[key]) || {};
+    const groups = v.pg_ranks_map || [];
+    PG[key] = { alias: g.alias || key, count: g.count ?? groups.length,
+      size: g.size ?? (groups[0] ? groups[0].length : 0), groups,
+      ids: v.pg_ids || groups.map((_, i) => String(i)),
+      descriptions: v.pg_descs || [], backends: v.backend_configs || [],
+      sizes: v.pg_sizes || [] };
+  }
+  installGroupLabels(PG);
+  const rankToGroups = {}; // rank -> [{pg, gid}]
+  for (const k of Object.keys(PG).filter((x) => PG[x].size > 1).sort())
+    PG[k].groups.forEach((ranks, i) => {
+      const gid = PG[k].ids[i] ?? String(i);
+      const stem = groupStem(PG, k, gid);
+      ranks.forEach((r) => (rankToGroups[r] ||= []).push({ pg: k, gid, index: i, stem }));
+    });
+  return { PG, rankToGroups };
+}
+// Resolve {PG, rankToGroups}. The island holds raw pg_map JSON when
+// small, or an enc() gz64 wrapper when large (told apart by shape —
+// a real pg_map is an object of objects, never {"t","v"} of strings).
+// Resolves null only while the island is still streaming in (it is the
+// document's last element) — not cached, so a later call still lands.
+function pgmReady() {
+  if (PGM) return Promise.resolve(PGM);
+  if (pgmPending) return pgmPending;
+  const island = document.getElementById("comms_viz-pgmap");
+  if (!island) return Promise.resolve(null);
+  const parsed = JSON.parse(island.textContent) || {};
+  if (parsed.t === "gz64" && typeof parsed.v === "string")
+    return pgmPending = decodeEnc(parsed).then((text) =>
+      (PGM = buildPgm(JSON.parse(text) || {})));
+  return pgmPending = Promise.resolve(PGM = buildPgm(parsed));
+}
+// Sidecar group index, decoded from the compact form ([[prefix, [gid,
+// len, …]], …] with members laid out back to back from pg_base).
+const GROUPS = (() => {
+  const out = [];   // [{stem, off, len}] in sidecar layout order
+  let off = RAW.pg_base || 0;
+  for (const [prefix, pairs] of RAW.pg_index || []) {
+    for (let i = 0; i < pairs.length; i += 2) {
+      out.push({ stem: pairs[i] == null ? prefix : prefix + "_" + pairs[i],
+        off, len: pairs[i + 1] });
+      off += pairs[i + 1];
+    }
+  }
+  return out;
+})();
+// Group display labels. Member stems carry the emit-side axis name
+// ({axis}_{gid}, e.g. fsdp_10) while the calculator and sidebar speak the
+// pg_map key (dp+cp10); pg_summary holds both sides (alias = axis, key =
+// display). Label every group in the pg_map vocabulary — dp+cp_10 — and
+// resolve back to the stem for sidecar lookups, so all three surfaces
+// agree on one set of names.
+const STEM_LABEL = new Map(), LABEL_STEM = new Map();
+const STEMS = new Set(GROUPS.map((g) => g.stem));
+// Sidecar member with rank activity and PM samples; not a process group.
+const DIAG_STEM = "diagnostics_0";
+// Counter timeline members: one per PM_BIN_RANKS consecutive ranks.
+const PM_BIN_PREFIX = "diagnostics_pm_", PM_BIN_RANKS = 32;
+const PM_BIN_STATS = ["min", "p1", "p50", "p99", "max"];
+const isDiag = (s) => s === DIAG_STEM || s.startsWith(PM_BIN_PREFIX);
+// <cohort-logic> Pure matching functions; tests/integration/semantics.rs runs
+// them under node against the structured report's Rust port.
+// c10d p2p calls, whose sequence number is 0 on every send and recv.
+const isP2p = (e) => ["send", "recv"].includes(e.operation) || ["send", "recv"].includes(e.collective);
+// Peer cohorts, shared so the imbalance table, straggler stats and hover
+// tooltip can never disagree about who the straggler is. Each rank's events
+// are first grouped into one instance per collective call (instancesOf()), so
+// a call that launches several kernels or copies counts once. Instances
+// match on (physical PG, step, collective, c10d sequence), and occurrence is
+// counted within that key on every rank, since CUDA-graph replays repeat a
+// captured sequence. Calls without a sequence, and p2p calls (c10d gives
+// every send/recv sequence 0), join no cohort: only their position would
+// pair them across ranks, and one call missing from the capture would
+// silently mispair every later one. They stay on the timeline. Built once
+// per group (build() invalidates) and stamped onto the events as
+// `cohortKey`, so hover stays O(1) instead of re-bucketing per pixel.
+function cohortsOf(events) {
+  const perRank = new Map();
+  for (const e of events) {
+    e.cohortKey = null; e.instance = null;
+    if (!perRank.has(e.rank)) perRank.set(e.rank, []);
+    perRank.get(e.rank).push(e);
+  }
+  const byKey = new Map(), list = [];
+  // Rank insertion order decides ties, matching the pre-cohort table.
+  for (const evs of perRank.values()) {
+    evs.sort((a, b) => a.ts - b.ts);
+    const occurrences = new Map();
+    instancesOf(evs).forEach((inst) => {
+      if (inst.sequence == null || isP2p(inst)) return;
+      const base = `${inst.pg}\u0000${inst.step ?? "?"}\u0000${inst.collective}\u0000${inst.sequence}`;
+      const occurrence = occurrences.get(base) || 0;
+      occurrences.set(base, occurrence + 1);
+      const key = `${base}\u0000${occurrence}`;
+      let c = byKey.get(key);
+      if (!c) {
+        const seq = Number(inst.sequence);
+        c = { seq: Number.isFinite(seq) ? seq : inst.sequence, step: inst.step, n: 0, ear: inst, lat: inst,
+          quick: inst, slow: inst, matched: true, members: [] };
+        byKey.set(key, c); list.push(c);
+      } else if (c.ear.matchName !== inst.matchName) {
+        c.matched = false;
+      }
+      if (c.step !== inst.step) c.step = null;
+      c.n++; c.members.push(inst);
+      for (const ev of inst.events) ev.cohortKey = key;
+      if (inst.ts < c.ear.ts) c.ear = inst;
+      if (inst.ts > c.lat.ts) c.lat = inst;
+      if (inst.dur < c.quick.dur) c.quick = inst;
+      if (inst.dur > c.slow.dur) c.slow = inst;
+    });
+  }
+  return { list, byKey, unmatched: events.filter((e) => e.cohortKey == null).length };
+}
+// One rank's events (sorted by start) as one instance per collective call.
+// Events a call tags with the same collective metadata, e.g. a copy-engine
+// all-gather's several copies, join one instance when they share PG, step,
+// collective, sequence, p2p direction and peer, and graph replay, and are
+// consecutive among that PG's events, since graph replays repeat
+// sequences. Events without a sequence, and p2p send/recv (c10d gives every
+// one sequence 0, so back-to-back sends to one peer would look like one call),
+// are never grouped. An instance with
+// a communication kernel spans its kernels, so local work the call also
+// tags, like copy-in/out, can't stretch it; one made only of copies (a
+// copy-engine collective) spans all of them.
+function instancesOf(evs) {
+  const groups = [], open = new Map(); // pg -> [key, events] of its last group
+  for (const ev of evs) {
+    const peer = ev.operation === "send" ? ev.dst : ev.operation === "recv" ? ev.src : "";
+    const key = ev.sequence == null || isP2p(ev) ? null : [ev.step ?? "?", ev.collective, ev.sequence,
+      ev.operation ?? "", peer ?? "", ev.replay ?? ""].join("\u0000");
+    const last = open.get(ev.pg);
+    if (key != null && last && last[0] === key) { last[1].push(ev); continue; }
+    const group = [ev];
+    groups.push(group);
+    open.set(ev.pg, [key, group]);
+  }
+  return groups.map((events) => {
+    const kernels = events.filter((e) => e.commKernel);
+    const timed = kernels.length ? kernels : events;
+    let ts = Infinity, end = -Infinity;
+    for (const e of timed) { ts = Math.min(ts, e.ts); end = Math.max(end, e.ts + e.dur); }
+    const inst = { ...events[0], ts, dur: end - ts, events,
+      matchName: events[0].collective || events[0].originalName };
+    for (const e of events) e.instance = inst;
+    return inst;
+  });
+}
+function cohortComplete(c) {
+  if (!c || c.n < 2 || !c.matched) return false;
+  const expected = c.members.find((e) => e.groupSize > 0)?.groupSize;
+  if (expected == null) return true;
+  return c.n === expected
+    && new Set(c.members.map((e) => e.rank)).size === expected
+    && c.members.every((e) => e.groupSize < 0 || e.groupSize === expected);
+}
+// </cohort-logic>
+const PM_STATS = ["n", "min", "p10", "p50", "mean", "p90", "p99", "max", "std"];
+{
+  for (const [s] of RAW.per_pg || []) STEMS.add(s);
+  const keyByAlias = new Map();
+  for (const p of RAW.pg_summary || [])
+    if (p.alias && p.alias !== p.key) keyByAlias.set(p.alias, p.key);
+  for (const s of STEMS) {
+    const m = s.match(/^(.+)_(\d+)$/);
+    const key = keyByAlias.get(m ? m[1] : s);
+    const label = key == null ? s : (m ? `${key}_${m[2]}` : key);
+    STEM_LABEL.set(s, label); LABEL_STEM.set(label, s);
+  }
+}
+// <group-labels>
+function prettyAxis(axis) {
+  const upper = new Set(["cp", "dp", "ep", "fsdp", "hsdp", "pp", "tp"]);
+  return axis.split(/([_+])/).map((part) =>
+    part === "_" ? " " : part === "+" ? " + " :
+    upper.has(part.toLowerCase()) ? part.toUpperCase() :
+    part ? part[0].toUpperCase() + part.slice(1) : "").join("");
+}
+// Sidecar stems use the axis alias when there is one, else the pg_map key.
+function groupStem(PG, key, gid) {
+  const candidates = [`${PG[key].alias || key}_${gid}`, `${key}_${gid}`];
+  return candidates.find((candidate) => STEMS.has(candidate));
+}
+// Each group's lowest rank, for ordering the group picker, and its ranks;
+// set with the labels.
+const STEM_FIRST_RANK = new Map(), STEM_RANKS = new Map();
+function installGroupLabels(PG) {
+  const entries = [];
+  for (const [key, group] of Object.entries(PG)) {
+    group.groups.forEach((ranks, i) => {
+      const stem = groupStem(PG, key, group.ids[i] ?? String(i));
+      if (!stem) return;
+      STEM_FIRST_RANK.set(stem, Math.min(...ranks));
+      STEM_RANKS.set(stem, ranks);
+      const shown = ranks.slice(0, 8).join(", ");
+      const more = ranks.length > 8 ? `, … +${loc(ranks.length - 8)}` : "";
+      entries.push({ stem, base: `${prettyAxis(group.alias || key)} (r ${shown}${more})` });
+    });
+  }
+  const totals = new Map();
+  for (const entry of entries) totals.set(entry.base, (totals.get(entry.base) || 0) + 1);
+  const seen = new Map();
+  for (const entry of entries) {
+    const ordinal = (seen.get(entry.base) || 0) + 1;
+    seen.set(entry.base, ordinal);
+    const total = totals.get(entry.base);
+    const label = total > 1 ? `${entry.base} · ${ordinal}/${total}` : entry.base;
+    STEM_LABEL.set(entry.stem, label);
+    LABEL_STEM.set(label, entry.stem);
+  }
+}
+// </group-labels>
+const stemLabel = (s) => STEM_LABEL.get(s) ?? s;
+const labelStem = (l) => LABEL_STEM.get(l) ?? l;
+// Group picker order: axis, then lowest rank, then label, numbers compared as
+// numbers (tp_2 before tp_10) while the rank lists are still loading.
+// One collator: localeCompare with options builds one per call, which made
+// sorting ~100k group names take seconds.
+const natural = new Intl.Collator(undefined, { numeric: true }).compare;
+function compareGroups(a, b) {
+  const axis = (s) => stemLabel(s).replace(/ \(r .*$/, "");
+  return natural(axis(a), axis(b))
+    || (STEM_FIRST_RANK.get(a) ?? 0) - (STEM_FIRST_RANK.get(b) ?? 0)
+    || natural(stemLabel(a), stemLabel(b)) || natural(a, b);
+}
+// --- rank map ----------------------------------------------------------------
+let RANKMAP = [];  // [{rank, host, file}]
+let RANKBYID = new Map();  // rank -> RANKMAP row
+let HOSTS = [];    // [{host, ranks:[{rank}]}]
+function buildHosts() {
+  RANKBYID = new Map(RANKMAP.map((r) => [r.rank, r]));
+  const byHost = new Map();
+  for (const r of RANKMAP) {
+    if (!byHost.has(r.host)) { byHost.set(r.host, { host: r.host, ranks: [] }); }
+    byHost.get(r.host).ranks.push(r);
+  }
+  HOSTS = [...byHost.values()];
+}
+// Ranks with a row in the full breakdown; null until it loads (nothing greyed).
+let ANALYZED = null;
+const analyzed = (rank) => !ANALYZED || ANALYZED.has(rank);
+// --- header / sidebar --------------------------------------------------------
+function renderHeader() {
+  // The copy target is a span inside the h1, not the h1 itself, so the
+  // heading keeps its heading semantics instead of turning into a button.
+  const title = document.getElementById("h-title");
+  title.textContent = "";
+  title.append(jobName ? copySpan(jobName) : "comms_viz run");
+  const [lbl, tone] = STATUS[run.status] || [String(run.status), "warn"];
+  document.getElementById("h-status").append(el("span", { class: "pill " + tone }, lbl));
+  const eng = cfg.engine;
+  if (eng) document.getElementById("h-engine").append(
+    el("span", { class: "chip" }, `engine: ${eng.name} ${eng.version || ""} @${eng.rev || "?"}`));
+  const runid = document.getElementById("h-runid");
+  runid.textContent = RAW.run_id;
+  markCopyable(runid, RAW.run_id);
+  document.getElementById("themebtn").addEventListener("click", () => {
+    const cur = document.documentElement.getAttribute("data-theme");
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme",
+      (cur ? cur === "dark" : dark) ? "light" : "dark");
+    redrawAll();
+  });
+  const wall = run.completed_at && run.started_at
+    ? (run.completed_at - run.started_at) / 1e6 : null;
+  const ranksP = status.ranks || {};
+  const rows = document.getElementById("meta-rows");
+  const kv = (k, v, mono) => rows.append(el("div", { class: "kv" },
+    el("span", { class: "k" }, k), el("span", { class: "v" + (mono ? " mono" : "") }, v)));
+  rows.append(el("div", { class: "kv" },
+    el("span", { class: "k" }, "Run ID:"), copySpan(RAW.run_id, "v mono")));
+  if (jobName) kv("Run:", jobName, true);
+  kv("Configured ranks:", loc(ranksP.total ?? run.total_ranks ?? 0), true);
+  kv("Ranks processed:", loc(ranksP.processed ?? 0), true);
+  kv("Started:", fmtMicros(run.started_at));
+  if (run.completed_at) kv("Completed:", fmtMicros(run.completed_at));
+  if (wall != null) kv("Wall time:", fmtDuration(wall), true);
+  if (run.error) rows.append(el("div", { class: "kv" },
+    el("span", { class: "k" }, "Error:"),
+    el("span", { class: "v", style: "color:var(--critical)" }, String(run.error))));
+  kv("Total GPUs:", loc(totalGpus), true);
+  const pgRows = document.getElementById("pg-rows");
+  pgRows.append(el("div", { class: "kv" },
+    el("span", { class: "k mono", style: "font-size:20px;color:var(--ink-1)" }, loc(totalGpus)),
+    el("span", { class: "v" }, "GPUs")));
+  for (const k of Object.keys(PGS).sort()) {
+    const p = PGS[k];
+    if (p.size > 1) pgRows.append(el("div", { class: "kv" },
+      el("span", { class: "k", style: "font-weight:650" }, k.toUpperCase()),
+      el("span", { class: "v" }, loc(p.size))));
+    else pgRows.append(el("div", { class: "kv", style: "opacity:.5" },
+      el("span", { class: "k" }, k.toUpperCase()),
+      el("span", { class: "v" }, "n/a")));
+  }
+}
+// --- PG calculator -----------------------------------------------------------
+// Rebound at boot (renderPgSearch / initSideNav); rank clicks land here.
+let pgCalcSet = () => {}, snavExpand = () => {};
+async function pgQuery(q) {
+  // pgmReady() also installs the group labels the lookup below reads.
+  const { rankToGroups } = (await pgmReady()) || { rankToGroups: {} };
+  const out = { ranks: new Set(), hosts: new Set(), notes: [], groups: [] };
+  // A group is queried by its label, exactly as the picker and these results
+  // show it; labels contain commas, so the whole query is tried first.
+  const stem = LABEL_STEM.get(q.trim());
+  if (stem) {
+    (STEM_RANKS.get(stem) || []).forEach((r) => out.ranks.add(r));
+    out.groups.push({ stem });
+    return out;
+  }
+  for (let term of q.split(",").map((t) => t.trim()).filter(Boolean)) {
+    if (/^\d+$/.test(term)) {
+      const r = +term;
+      if (rankToGroups[r]) { out.ranks.add(r);
+        out.groups.push(...(rankToGroups[r] || [])); }
+      else out.notes.push(`unknown rank ${r}`);
+    } else if (term.length) {
+      let hit = false;
+      for (const h of HOSTS) if (h.host && h.host.includes(term)) {
+        hit = true; out.hosts.add(h.host); h.ranks.forEach((r) => out.ranks.add(r.rank));
+      }
+      if (!hit) out.notes.push(`no host matches '${term}'`);
+    }
+  }
+  for (const r of out.ranks) { const row = RANKBYID.get(r);
+    if (row && row.host) out.hosts.add(row.host); }
+  return out;
+}
+function renderPgSearch() {
+  const box = document.getElementById("pg-out"), input = document.getElementById("pg-q");
+  let t = null;
+  input.addEventListener("input", () => { clearTimeout(t); t = setTimeout(go, 300); });
+  // Pre-populate from a rank click elsewhere on the page: expand a
+  // collapsed rail so the answer is visible, and skip the typing debounce.
+  pgCalcSet = (q) => {
+    snavExpand();
+    input.value = q;
+    clearTimeout(t);
+    go();
+    input.scrollIntoView({ block: "nearest" });
+  };
+  async function go() {
+    box.textContent = "";
+    const q = input.value.trim();
+    if (!q) return;
+    const r = await pgQuery(q);
+    if (q !== input.value.trim()) return; // input moved on mid-decode
+    for (const n of r.notes) box.append(el("div", { style: "color:var(--warning)" }, n));
+    const ranks = [...r.ranks].sort((a, b) => a - b);
+    if (ranks.length) {
+      box.append(el("div", { class: "hd" }, `Rank IDs (${loc(ranks.length)})`));
+      const wrap = el("div", { class: "rankbtns" });
+      for (const rk of ranks.slice(0, 50)) {
+        wrap.append(el("span", { class: "rk" + (analyzed(rk) ? "" : " off"),
+          onclick: () => pgCalcSet(String(rk)) }, String(rk)));
+      }
+      if (ranks.length > 50) wrap.append(el("span", { class: "note" }, `…+${ranks.length - 50}`));
+      box.append(wrap);
+    }
+    if (r.groups.length) {
+      // Pills deep-link into the Parallelism timeline when the group has a
+      // sidecar member (trivial PGs and axes like `default` are emitted
+      // without per-group data — those stay inert).
+      const wrap = el("div", { class: "rankbtns" }), seen = new Set();
+      for (const g of r.groups) {
+        const stem = g.stem ?? `${g.pg}_${g.gid}`;
+        const name = stemLabel(stem);
+        if (seen.has(stem)) continue;
+        seen.add(stem);
+        wrap.append(el("span", g.stem
+          ? { class: "rk pg", title: `Open ${name} (${stem}) in the Parallelism timeline`,
+              onclick: () => pl.jump(stem) }
+          : { class: "rk pg off", title: "no timeline data for this group" }, name));
+      }
+      box.append(el("div", { class: "hd" }, "Process Groups"), wrap);
+    }
+    if (r.hosts.size) box.append(el("div", { class: "hd" }, `Hosts (${r.hosts.size})`),
+      el("div", {}, copySpan([...r.hosts].join(", "), "mono")));
+  }
+}
+// --- tabs ----------------------------------------------------------------------
+const TABS = [["breakdown", "Breakdown"], ["parallelism", "Parallelism"],
+  ["traces", "Collected Traces"], ["metadata", "Metadata"]];
+function renderTabs() {
+  const nav = document.getElementById("tabs");
+  for (const [id, label] of TABS)
+    nav.append(el("button", { id: "tabbtn-" + id, onclick: () => showTab(id) }, label));
+  showTab(location.hash.slice(1) || "breakdown");
+}
+function showTab(id) {
+  if (!TABS.some(([t]) => t === id)) id = "breakdown";
+  for (const [t] of TABS) {
+    document.getElementById("tab-" + t).classList.toggle("on", t === id);
+    document.getElementById("tabbtn-" + t).classList.toggle("on", t === id);
+  }
+  history.replaceState(null, "", "#" + id);
+  if (id === "breakdown") bd.draw();
+  if (id === "parallelism") pl.ensure();
+}
+// --- axis helpers -----------------------------------------------------------
+// GPU counter values as stored in the trace, shortened: 417M, 249k, 10.9.
+function fmtCounter(v) {
+  const a = Math.abs(v);
+  if (a >= 1e9) return (v / 1e9).toFixed(1) + "G";
+  if (a >= 1e6) return (v / 1e6).toFixed(1) + "M";
+  if (a >= 1e4) return (v / 1e3).toFixed(0) + "k";
+  return a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : v.toFixed(2);
+}
+function niceTicks(max, n, minStep) {
+  if (max <= 0) return [0];
+  const step0 = max / n, mag = 10 ** Math.floor(Math.log10(step0));
+  let step = [1, 2, 5, 10].map((m) => m * mag).find((s) => max / s <= n) || 10 * mag;
+  if (minStep && step < minStep) step = minStep; // integer axes (rank ids)
+  const out = [];
+  for (let v = 0; v <= max + 1e-9; v += step) out.push(v);
+  return out;
+}
+function setupCanvas(cv, cssH) {
+  const dpr = devicePixelRatio || 1, w = cv.clientWidth || cv.parentElement.clientWidth;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(cssH * dpr);
+  cv.style.height = cssH + "px";
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, W: w, H: cssH };
+}
+function attachZoom(cv, getDomain, setDomain, px2x, min) {
+  // Rubber band over the drag region; appears only past the 8px threshold,
+  // so a plain click never flashes it. Positioned in the chartwrap's content
+  // coordinates (the parallelism canvas is sticky inside a scrolled wrap).
+  const wrap = cv.closest(".chartwrap");
+  const band = el("div", { class: "zoomband" });
+  wrap.append(band);
+  let drag = null;
+  const shape = (x) => {
+    const a = Math.min(drag, x), b = Math.max(drag, x);
+    const r = cv.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+    band.style.left = r.left - w.left + wrap.scrollLeft + a + "px";
+    band.style.top = r.top - w.top + wrap.scrollTop + "px";
+    band.style.width = b - a + "px";
+    band.style.height = r.height + "px";
+    band.style.display = b - a > 8 ? "block" : "none";
+  };
+  // Releasing anywhere (including off-canvas) ends the gesture; the canvas
+  // mouseup below runs first, so a completed drag still zooms. Registered per
+  // drag so rebuilt canvases leave no window listeners behind.
+  const end = () => { drag = null; band.style.display = "none"; };
+  cv.addEventListener("mousedown", (e) => {
+    drag = e.offsetX;
+    addEventListener("mouseup", end, { once: true });
+  });
+  cv.addEventListener("mousemove", (e) => { if (drag != null) shape(e.offsetX); });
+  cv.addEventListener("mouseup", (e) => {
+    if (drag == null) return;
+    const a = Math.min(drag, e.offsetX), b = Math.max(drag, e.offsetX);
+    drag = null;
+    if (b - a > 8) setDomain(px2x(a), px2x(b));
+  });
+  cv.addEventListener("dblclick", () => setDomain(null, null));
+  // Trackpad: pinch zooms around the cursor (browsers deliver it as
+  // ctrl+wheel; Safari sends gesture* instead), two-finger horizontal scroll
+  // pans. Vertical scroll falls through to the wrap/page.
+  const zoomAt = (px, f) => {
+    const [x0, x1] = getDomain(), t = px2x(px);
+    setDomain(t - (t - x0) * f, t + (x1 - t) * f);
+  };
+  cv.addEventListener("wheel", (e) => {
+    const s = e.deltaMode ? 16 : 1; // line-mode deltas ≈ 16px
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault(); // don't page-zoom
+      // ±0.5 cap keeps a discrete mouse-wheel notch near the w/s step (1.5x)
+      zoomAt(e.offsetX, Math.exp(Math.max(-0.5, Math.min(0.5, s * e.deltaY * 0.01))));
+    } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      e.preventDefault(); // don't history-swipe
+      const [x0, x1] = getDomain();
+      const dx = Math.max(px2x(s * e.deltaX) - px2x(0), (min ?? -Infinity) - x0);
+      if (dx) setDomain(x0 + dx, x1 + dx);
+    }
+  }, { passive: false });
+  let pinch = 1; // Safari's e.scale is cumulative since gesturestart
+  cv.addEventListener("gesturestart", (e) => { e.preventDefault(); pinch = 1; });
+  cv.addEventListener("gesturechange", (e) => {
+    e.preventDefault();
+    zoomAt(e.clientX - cv.getBoundingClientRect().left, pinch / e.scale);
+    pinch = e.scale;
+  });
+}
+// Place the tooltip against the browser viewport, not its container: the
+// parallelism wrap is an 800px scroll box, so a card anchored in its content
+// lost its bottom rows whenever the visible strip was shorter than the card.
+// The card is position:fixed, so it also stays out of the wrap/page scroll
+// area — the scrollbar never pops in and reflows the chart under the mouse.
+// Prefers below-right of the cursor, flips above when the card would overrun
+// the bottom edge, and clamps to the viewport so the whole card stays visible.
+function placeTip(tt, e) {
+  tt.style.left = "0px"; // measure at full available width before placing
+  tt.style.top = "0px";
+  const w = tt.offsetWidth, h = tt.offsetHeight;
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+  tt.style.left = Math.max(6, Math.min(e.clientX + 14, vw - w - 6)) + "px";
+  const below = e.clientY + 14, above = e.clientY - h - 10;
+  const y = below + h + 6 <= vh ? below : above;
+  tt.style.top = Math.max(6, Math.min(y, vh - h - 6)) + "px";
+}
+// A hover (i) explaining how a value is computed. Clicks stop here, so the
+// icon doesn't also sort a header or toggle a checkbox label it sits in.
+function infoMark(info) {
+  let tt = document.getElementById("info-tt");
+  if (!tt) { tt = el("div", { class: "tt infotip", id: "info-tt" }); document.body.append(tt); }
+  const show = (e) => { tt.textContent = info; tt.style.display = "block"; placeTip(tt, e); };
+  return el("span", { class: "info", onmouseenter: show, onmousemove: show,
+    onmouseleave: () => { tt.style.display = "none"; },
+    onclick: (e) => { e.preventDefault(); e.stopPropagation(); } }, "ⓘ");
+}
+// Table header with a hover (i) explaining how the column is computed.
+function infoTh(label, info, attrs = {}) {
+  return el("th", attrs, label, infoMark(info));
+}
+document.querySelector("#pl-activity-control label")
+  .append(infoMark("Measured between each rank's first and last GPU events"));
+// w/s zoom (1.5x in / 0.67x out around the view center) and a/d pan (20% of
+// the visible span) on the active tab's chart.
+const keyNav = {}; // tab id -> { dom, set, min? } (min: pan/zoom left stop)
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k !== "w" && k !== "a" && k !== "s" && k !== "d") return;
+  if (/^(input|select|textarea)$/i.test(e.target.tagName)) return;
+  const tab = document.querySelector("section.tab.on");
+  const nav = tab && keyNav[tab.id.slice(4)];
+  if (!nav) return;
+  e.preventDefault();
+  const [x0, x1] = nav.dom(), span = Math.max(x1 - x0, 1e-9), c = (x0 + x1) / 2;
+  if (k === "w") nav.set(c - span / 3, c + span / 3);
+  else if (k === "s") nav.set(c - span / 1.34, c + span / 1.34);
+  else {
+    const dx = k === "a" ? -Math.min(span * 0.2, x0 - (nav.min ?? -Infinity)) : span * 0.2;
+    if (dx) nav.set(x0 + dx, x1 + dx);
+  }
+});
+// --- breakdown ---------------------------------------------------------------
+// Hover explainers for the headline series; the rest are self-describing.
+const BD_INFO = {
+  total_duration: "Time between the first and last GPU event",
+  comm_total: "Total GPU time for recognized communication kernels, including wait time "
+    + "for other ranks, for both sync & async comms",
+  comp_total: "Total GPU time for non-comm kernels, excluding memcpy/memset",
+};
+const bdInfo = (c) => (BD_INFO[c] ? [infoMark(BD_INFO[c])] : []);
+const bd = {
+  cats: [], enabled: new Set(), slotOf: new Map(),
+  ranks: [], cols: {}, domain: null, sort: { col: "rank", dir: 1 }, page: 0,
+  full: false, wired: false,
+  ML: 76, MR: 14, MT: 12, MB: 42,
+  // Status floats over the chart corner — never in flow, so its coming
+  // and going can't shift the layout under the reader.
+  note(text) {
+    let n = document.getElementById("bd-note");
+    if (!n) {
+      n = el("div", { class: "chartnote", id: "bd-note" });
+      document.getElementById("bd-canvas").parentElement.append(n);
+    }
+    n.textContent = text || "";
+    n.style.display = text ? "" : "none";
+  },
+  // Parse `csv` into the rank/column arrays. Columns absent from the CSV
+  // (a preview carries only the default series) stay undefined; draw and
+  // friends skip them until the full data lands.
+  initData(csv) {
+    const { head, rows } = parseCsv(csv);
+    const ri = head.indexOf("rank");
+    this.cols = {};
+    for (const c of head) if (c !== "rank") this.cols[c] = new Float64Array(rows.length);
+    this.ranks = new Float64Array(rows.length);
+    rows.forEach((r, i) => {
+      this.ranks[i] = +r[ri];
+      head.forEach((h, j) => { if (h !== "rank") this.cols[h][i] = +r[j] || 0; });
+    });
+    const order = Array.from(this.ranks.keys()).sort((a, b) => this.ranks[a] - this.ranks[b]);
+    this.ranks = Float64Array.from(order, (i) => this.ranks[i]);
+    for (const c of Object.keys(this.cols))
+      this.cols[c] = Float64Array.from(order, (i) => this.cols[c][i]);
+  },
+  // First data in. `cats`, when given, is the full category list even if
+  // `csv` carries only the preview's default series.
+  init(csv, cats, preview) {
+    this.initData(csv);
+    this.cats = cats || Object.keys(this.cols);
+    this.full = !preview;
+    const pickable = this.pickable();
+    const defaults = ["comp_total", "comm_total"].filter((c) => pickable.includes(c));
+    for (const c of defaults.length ? defaults : pickable.slice(0, 2)) this.toggle(c, true);
+    this.renderCats();
+    // Don't clobber a fetch-failure note that already landed (the boot
+    // catch can beat the preview's async decode on offline copies).
+    if (preview && !document.getElementById("bd-note")?.textContent)
+      this.note("Preview resolution — loading the full breakdown…");
+    if (!this.wired) { this.wired = true; this.wire(); }
+  },
+  // The exact CSV from the sidecar replacing the preview: user state
+  // (series, zoom, sort, table) carries over; series the preview lacked
+  // fill in on this draw.
+  upgrade(csv) {
+    if (this.full) return;
+    if (!this.ranks.length) { this.init(csv); this.draw(); return; }
+    this.initData(csv);
+    this.cats = Object.keys(this.cols);
+    this.full = true;
+    // Drop series the preview offered that turn out to be zero on every rank.
+    const pickable = new Set(this.pickable());
+    for (const c of [...this.enabled]) if (!pickable.has(c)) this.toggle(c, false);
+    this.note("");
+    this.renderCats();
+    this.draw();
+    if (document.getElementById("bd-table").style.display !== "none") this.renderTable();
+  },
+  wire() {
+    document.getElementById("bd-reset").addEventListener("click", () => { this.domain = null; this.draw(); });
+    document.getElementById("bd-pct").addEventListener("change", () => this.draw());
+    document.getElementById("bd-table-btn").addEventListener("click", () => {
+      const d = document.getElementById("bd-table");
+      const on = d.style.display === "none";
+      d.style.display = on ? "" : "none";
+      document.getElementById("bd-table-btn").textContent = on ? "Hide Table" : "Show Table";
+      if (on) this.renderTable();
+    });
+    document.getElementById("bd-all").addEventListener("click", () => {
+      for (const c of this.pickable()) this.toggle(c, true);
+      this.renderCats(); this.draw();
+    });
+    document.getElementById("bd-clear").addEventListener("click", () => {
+      for (const c of [...this.enabled]) this.toggle(c, false);
+      this.renderCats(); this.draw();
+    });
+    const cv = document.getElementById("bd-canvas");
+    const set = (a, b) => { this.domain = a == null ? null : [a, b]; this.draw(); };
+    attachZoom(cv, () => this.dom(), set, (px) => { const [x0, x1] = this.dom();
+      return x0 + (px - this.ML) / (cv.clientWidth - this.ML - this.MR) * (x1 - x0); });
+    keyNav.breakdown = { dom: () => this.dom(), set };
+    // A click (as opposed to a >8px zoom drag — attachZoom's threshold)
+    // looks the nearest rank up in the PG calculator.
+    let downX = null;
+    cv.addEventListener("mousedown", (e) => { downX = e.offsetX; });
+    cv.addEventListener("click", (e) => {
+      if (downX != null && Math.abs(e.offsetX - downX) > 8) return;
+      const r = this.rankAt(e.offsetX);
+      if (r != null) pgCalcSet(String(r));
+    });
+    cv.addEventListener("mousemove", (e) => this.hover(e));
+    cv.addEventListener("mouseleave", () => { document.getElementById("bd-tt").style.display = "none"; });
+    addEventListener("resize", () => this.draw());
+  },
+  // Series a run never produces (zero on every rank) aren't offered in the
+  // picker. A preview carries only the default series, so the rest stay
+  // listed until the full data shows whether they occur.
+  pickable() {
+    return this.cats.filter((c) => !this.cols[c] || this.cols[c].some((v) => v !== 0));
+  },
+  // color follows the entity: a category keeps its slot while enabled, and a
+  // newly enabled one takes the lowest free slot. Slots past the palette get
+  // hues spread around the wheel, so any number of series can be shown.
+  toggle(cat, on) {
+    if (on && !this.enabled.has(cat)) {
+      const used = new Set(this.slotOf.values());
+      let slot = 0;
+      while (used.has(slot)) slot++;
+      this.slotOf.set(cat, slot);
+      this.enabled.add(cat);
+    } else if (!on && this.enabled.has(cat)) {
+      this.slotOf.delete(cat); this.enabled.delete(cat);
+    }
+  },
+  colorVar(cat) {
+    const slot = this.slotOf.get(cat);
+    if (slot < SLOTS.length) return `var(${SLOTS[slot]})`;
+    return `hsl(${Math.round(((slot - SLOTS.length) * 137.508 + 20) % 360)} 60% 50%)`;
+  },
+  color(cat) {
+    const slot = this.slotOf.get(cat);
+    return slot < SLOTS.length ? css(SLOTS[slot]) : this.colorVar(cat);
+  },
+  renderCats() {
+    const box = document.getElementById("bd-cats");
+    box.textContent = "";
+    for (const c of this.pickable()) {
+      const cb = el("input", { type: "checkbox" });
+      cb.checked = this.enabled.has(c);
+      cb.addEventListener("change", () => {
+        this.toggle(c, cb.checked);
+        this.renderCats(); this.draw();
+      });
+      const dot = el("span", { class: "sw",
+        style: this.enabled.has(c) ? `background:${this.colorVar(c)}` : "border:1px solid var(--axis)" });
+      box.append(el("label", {}, cb, dot, c, ...bdInfo(c)));
+    }
+    const lg = document.getElementById("bd-legend");
+    lg.textContent = "";
+    for (const c of this.enabled) lg.append(el("span", { class: "it" },
+      el("span", { class: "sw", style: `background:${this.colorVar(c)}` }), c, ...bdInfo(c)));
+  },
+  dom() {
+    if (this.domain) return this.domain;
+    const n = this.ranks.length;
+    return [this.ranks[0] ?? 0, this.ranks[n - 1] ?? 1];
+  },
+  draw() {
+    const cv = document.getElementById("bd-canvas");
+    if (!cv.clientWidth || !this.ranks.length) return;
+    const { ctx, W, H } = setupCanvas(cv, 500);
+    const { ML, MR, MT, MB } = this, PW = W - ML - MR, PH = H - MT - MB;
+    const [x0, x1] = this.dom(), span = Math.max(x1 - x0, 1e-9);
+    // Per-pixel buckets feed the hover tooltip and the y-scale; the marks
+    // themselves are per-rank dots (below), so ymax tracks raw values —
+    // a straggler above its column's mean must not clip the top.
+    const buckets = new Map();
+    let ymax = 0, nView = 0;
+    for (let i = 0; i < this.ranks.length; i++)
+      if (this.ranks[i] >= x0 && this.ranks[i] <= x1) nView++;
+    for (const c of this.enabled) {
+      if (!this.cols[c]) continue; // enabled before the full data arrived
+      const sum = new Float64Array(PW), cnt = new Float64Array(PW);
+      const min = new Float64Array(PW).fill(Infinity), max = new Float64Array(PW);
+      for (let i = 0; i < this.ranks.length; i++) {
+        const r = this.ranks[i];
+        if (r < x0 || r > x1) continue;
+        const px = Math.min(PW - 1, Math.max(0, Math.floor((r - x0) / span * PW)));
+        const v = this.cols[c][i];
+        sum[px] += v; cnt[px]++;
+        if (v < min[px]) min[px] = v;
+        if (v > max[px]) max[px] = v;
+        if (v > ymax) ymax = v;
+      }
+      buckets.set(c, { sum, cnt, min, max });
+    }
+    const pct = document.getElementById("bd-pct").value;
+    let pctVal = null;
+    if (pct) {
+      const all = [];
+      for (const c of this.enabled) for (const v of this.cols[c] || []) all.push(v);
+      all.sort((a, b) => a - b);
+      if (all.length) {
+        const idx = (all.length - 1) * (+pct / 100), lo = Math.floor(idx);
+        pctVal = all[lo] + (all[Math.min(lo + 1, all.length - 1)] - all[lo]) * (idx - lo);
+        ymax = Math.max(ymax, pctVal);
+      }
+    }
+    ymax = ymax * 1.1 || 1;
+    ctx.clearRect(0, 0, W, H);
+    ctx.font = "11px system-ui"; ctx.fillStyle = css("--ink-3");
+    const yticks = niceTicks(ymax, 5);
+    ctx.strokeStyle = css("--grid"); ctx.lineWidth = 1;
+    for (const v of yticks) {
+      const y = MT + PH - v / ymax * PH;
+      ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(W - MR, y); ctx.stroke();
+      ctx.textAlign = "right"; ctx.fillText(loc(v), ML - 6, y + 4);
+    }
+    ctx.strokeStyle = css("--axis");
+    ctx.beginPath(); ctx.moveTo(ML, MT + PH); ctx.lineTo(W - MR, MT + PH); ctx.stroke();
+    ctx.textAlign = "center";
+    for (const v of niceTicks(span, 8, 1)) {
+      const x = ML + v / span * PW;
+      ctx.fillText(loc(x0 + v), x, H - MB + 16);
+    }
+    ctx.fillText("Rank ID", ML + PW / 2, H - 6);
+    ctx.save(); ctx.translate(12, MT + PH / 2); ctx.rotate(-Math.PI / 2);
+    ctx.fillText("TOTAL DURATION / μS", 0, 0); ctx.restore();
+    // Every rank is its own translucent dot — nothing averaged away, so
+    // stragglers and slow hosts stay visible as points. Radius and opacity
+    // scale with the pixels one rank gets, converging on the old 3px dots
+    // when sparse; overlap darkens, so overplot reads as density. `seen`
+    // dedupes exact-coincident dots (they only re-darken one pixel), which
+    // bounds a draw by plot area rather than world size.
+    const ppr = PW / Math.max(nView, 1);
+    const rad = Math.max(1.2, Math.min(3, 0.45 * ppr));
+    const seen = new Uint8Array(PW * (PH + 1));
+    ctx.globalAlpha = Math.min(1, 0.45 + 0.1 * ppr);
+    for (const c of this.enabled) {
+      if (!this.cols[c]) continue;
+      seen.fill(0);
+      ctx.fillStyle = this.color(c);
+      for (let i = 0; i < this.ranks.length; i++) {
+        const r = this.ranks[i];
+        if (r < x0 || r > x1) continue;
+        const x = ML + (r - x0) / span * PW;
+        const y = MT + PH - this.cols[c][i] / ymax * PH;
+        const key = Math.min(PW - 1, Math.floor(x - ML)) * (PH + 1) +
+          Math.min(PH, Math.max(0, Math.round(y - MT)));
+        if (seen[key]) continue;
+        seen[key] = 1;
+        ctx.beginPath(); ctx.arc(x, y, rad, 0, 7); ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+    if (pctVal != null) {
+      const y = MT + PH - pctVal / ymax * PH;
+      ctx.strokeStyle = css("--critical"); ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(W - MR, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = css("--critical"); ctx.textAlign = "left";
+      ctx.fillText(`P${pct} = ${loc(pctVal)}`, ML + 6, y - 5);
+    }
+    this._view = { buckets, x0, x1, span, PW, PH, ymax };
+  },
+  // Nearest in-view rank to a canvas x, within the hover widening (12px) —
+  // null outside the plot or when no rank is that close.
+  rankAt(offsetX) {
+    const v = this._view;
+    if (!v || !this.ranks.length) return null;
+    const px = offsetX - this.ML;
+    if (px < 0 || px > v.PW) return null;
+    const target = v.x0 + px / v.PW * v.span;
+    let lo = 0, hi = this.ranks.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (this.ranks[mid] < target) lo = mid + 1; else hi = mid; }
+    let best = null;
+    for (const i of [lo, lo - 1]) {
+      if (i < 0) continue;
+      const r = this.ranks[i];
+      if (r < v.x0 || r > v.x1) continue;
+      const d = Math.abs((r - v.x0) / v.span * v.PW - px);
+      if (d <= 12 && (!best || d < best.d)) best = { r, d };
+    }
+    return best ? best.r : null;
+  },
+  hover(e) {
+    const v = this._view, tt = document.getElementById("bd-tt");
+    if (!v) return;
+    const px = Math.round(e.offsetX - this.ML);
+    if (px < 0 || px >= v.PW) { tt.style.display = "none"; return; }
+    tt.textContent = "";
+    tt.append(el("div", { class: "t" }, `Rank ~${loc(v.x0 + px / v.PW * v.span)}`));
+    let any = false;
+    for (const c of this.enabled) {
+      if (!v.buckets.has(c)) continue;
+      const { sum, cnt, min, max } = v.buckets.get(c);
+      // widen the hit to the nearest non-empty bucket within 12px
+      let p = -1;
+      for (let d = 0; d <= 12 && p < 0; d++)
+        for (const q of [px - d, px + d]) if (q >= 0 && q < v.PW && cnt[q]) { p = q; break; }
+      if (p < 0) continue;
+      any = true;
+      // a multi-rank column reports its spread, not just the mean
+      tt.append(el("div", { class: "r" },
+        el("span", { class: "n" }, el("span", { class: "sw", style: `background:${this.colorVar(c)};margin-right:5px` }), c),
+        el("span", { class: "v" }, cnt[p] > 1
+          ? `${loc(sum[p] / cnt[p])} (${loc(min[p])}–${loc(max[p])})`
+          : loc(sum[p] / cnt[p]))));
+    }
+    tt.style.display = any ? "block" : "none";
+    if (any) placeTip(tt, e);
+  },
+  renderTable() {
+    const box = document.getElementById("bd-table");
+    box.textContent = "";
+    if (!this.full) {
+      box.append(el("div", { class: "note" }, "The table needs the full breakdown — still loading…"));
+      return;
+    }
+    const cols = ["rank", ...this.cats];
+    const idx = Array.from(this.ranks.keys());
+    const key = (i, c) => c === "rank" ? this.ranks[i] : this.cols[c][i];
+    idx.sort((a, b) => (key(a, this.sort.col) - key(b, this.sort.col)) * this.sort.dir);
+    const pages = Math.max(1, Math.ceil(idx.length / 100));
+    this.page = Math.min(this.page, pages - 1);
+    const head = el("tr", {}, cols.map((c) => el("th", { onclick: () => {
+      if (this.sort.col === c) this.sort.dir *= -1; else this.sort = { col: c, dir: 1 };
+      this.renderTable();
+    } }, (c === "rank" ? "Rank" : c) + (this.sort.col === c ? (this.sort.dir > 0 ? " ▲" : " ▼") : ""),
+      ...bdInfo(c))));
+    const body = idx.slice(this.page * 100, this.page * 100 + 100).map((i) =>
+      el("tr", {}, cols.map((c) => c === "rank"
+        ? el("td", { class: "rlink", title: "Look this rank up in the PG calculator",
+            onclick: () => pgCalcSet(String(this.ranks[i])) }, loc(key(i, c)))
+        : el("td", {}, loc(key(i, c))))));
+    box.append(el("table", { class: "data" }, head, body));
+    box.append(el("div", { class: "pager" },
+      el("button", { class: "btn", onclick: () => { this.page--; this.renderTable(); },
+        ...(this.page === 0 ? { disabled: "" } : {}) }, "Prev"),
+      el("button", { class: "btn", onclick: () => { this.page++; this.renderTable(); },
+        ...(this.page >= pages - 1 ? { disabled: "" } : {}) }, "Next"),
+      `${loc(idx.length)} rows total`, `Page ${this.page + 1} / ${pages}`));
+  },
+};
+// --- group typeahead -----------------------------------------------------------
+// Fuzzy subsequence match: every query char must appear in `s` in order
+// (case-insensitive, whitespace ignored). Greedy left-to-right; consecutive
+// runs and matches at the start or right after '_' score higher. Returns
+// { score, pos } or null when the query doesn't fit.
+function fuzzyMatch(q, s, ls = s.toLowerCase()) {
+  const lq = q.toLowerCase().replace(/\s+/g, "");
+  let score = 0, qi = 0, last = -2;
+  const pos = [];
+  for (let i = 0; i < ls.length && qi < lq.length; i++) {
+    if (ls[i] !== lq[qi]) continue;
+    score += 1 + (i === last + 1 ? 2 : 0) + (i === 0 || ls[i - 1] === "_" ? 2 : 0);
+    pos.push(i); last = i; qi++;
+  }
+  return qi === lq.length ? { score, pos } : null;
+}
+// input+list dropdown: focus lists one option per group type (cp_0, fsdp_0,
+// …) so the available kinds are visible at a glance, typing fuzzy-filters all
+// options (score desc, original order on ties, matched chars bolded), ↑/↓ +
+// Enter or click picks, Esc/blur restores `current()`.
+function typeahead(input, list, options, current, onPick) {
+  const MAX = 100;
+  let matches = [], active = -1, collapsed = false, optionCount = 0, lastQuery = "";
+  const commit = (v) => { onPick(v); input.value = v; input.blur(); };
+  const refresh = () => {
+    list.textContent = "";
+    if (!matches.length) list.append(el("div", { class: "more" }, "no matching group"));
+    matches.slice(0, MAX).forEach((m, idx) => {
+      const frag = [];
+      let p = 0;
+      for (const j of m.pos) {
+        if (j > p) frag.push(m.s.slice(p, j));
+        frag.push(el("b", {}, m.s[j]));
+        p = j + 1;
+      }
+      if (p < m.s.length) frag.push(m.s.slice(p));
+      list.append(el("div", { class: "it" + (idx === active ? " on" : ""),
+        onmousedown: (e) => e.preventDefault(),   // keep focus so the click lands
+        onclick: () => commit(m.s) }, ...frag));
+    });
+    if (matches.length > MAX)
+      list.append(el("div", { class: "more" }, `+${loc(matches.length - MAX)} more — keep typing`));
+    else if (collapsed && matches.length < optionCount)
+      list.append(el("div", { class: "more" }, `one per group type — type to search all ${loc(optionCount)} groups`));
+    list.style.display = "";
+    const on = list.querySelector(".it.on");
+    if (on) on.scrollIntoView({ block: "nearest" });
+  };
+  let lowered = null, loweredFor = null, pending = 0;
+  const search = (q) => {
+    lastQuery = q;
+    matches = [];
+    collapsed = !q;
+    const values = typeof options === "function" ? options() : options;
+    optionCount = values.length;
+    if (loweredFor !== values) { lowered = values.map((v) => v.toLowerCase()); loweredFor = values; }
+    if (q) {
+      values.forEach((s, i) => {
+        const m = fuzzyMatch(q, s, lowered[i]);
+        if (m) matches.push({ s, pos: m.pos, score: m.score, i });
+      });
+      matches.sort((a, b) => b.score - a.score || a.i - b.i);
+    } else if (values.length <= MAX) {
+      values.forEach((s, i) => matches.push({ s, pos: [], score: 0, i }));
+      collapsed = false;
+    } else {
+      // First member of each group type (label minus the _<gid> suffix):
+      // cp_0, fsdp_0, … rather than pages of cp_0, cp_1, cp_2.
+      const seen = new Set();
+      values.forEach((s, i) => {
+        const kind = s.replace(/ \(r .*$/, "").replace(/_\d+$/, "");
+        if (seen.has(kind)) return;
+        seen.add(kind);
+        matches.push({ s, pos: [], score: 0, i });
+      });
+    }
+    active = q && matches.length ? 0 : -1;
+    refresh();
+  };
+  // On focus the value is the committed selection, not a query: select it
+  // (typing replaces) and list every option.
+  input.addEventListener("focus", () => { input.select(); search(""); });
+  // Coalesce fast typing into one search when there are many options: each
+  // search scans every one. Keys that act on the matches flush it first.
+  const flush = () => {
+    if (!pending) return;
+    clearTimeout(pending);
+    pending = 0;
+    search(input.value.trim());
+  };
+  input.addEventListener("input", () => {
+    clearTimeout(pending);
+    pending = setTimeout(flush, optionCount > 5000 ? 60 : 0);
+  });
+  input.addEventListener("blur", () => { list.style.display = "none"; input.value = current() || ""; });
+  input.addEventListener("keydown", (e) => {
+    if (["ArrowDown", "ArrowUp", "Enter"].includes(e.key)) flush();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = Math.min(matches.length, MAX);
+      if (!n) return;
+      active = ((active + (e.key === "ArrowDown" ? 1 : -1)) % n + n) % n;
+      refresh();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      // No active row (e.g. Enter straight after focus) keeps the current
+      // selection rather than silently picking the first option.
+      if (active >= 0 && matches[active]) commit(matches[active].s);
+      else input.blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      input.blur();
+    }
+  });
+  // Re-run the open list's search, e.g. once option labels change.
+  return { refresh: () => { if (list.style.display !== "none") search(lastQuery); } };
+}
+// --- parallelism ---------------------------------------------------------------
+const pl = {
+  cache: new Map(), stem: null, events: null, minT: 0, maxT: 0, domain: null,
+  nameSlot: new Map(), rows: [], imbSort: { col: "diff", dir: -1 }, imbPage: 0,
+  diagnostics: null, pmMetric: null, pmSort: null, pmBins: new Map(), _cohorts: null, _hoverKey: null,
+  // ML/SW are recomputed per group in build() from the widest rank and
+  // stream labels; SW is the small per-lane stream column beside the plot.
+  ML: 96, SW: 24, MR: 12, MB: 44,
+  // Every selectable group: the sidecar index when present (all groups in
+  // the run), else just the embedded warm set (no-sidecar publishes).
+  // Sorted once per label set: the picker asks on every focus and keystroke,
+  // and a 50k-rank run has ~100k groups.
+  stems() {
+    // Every stem has a placeholder label from the start; the rank-list
+    // labels arrive with the pg_map island (PGM).
+    const key = `${GROUPS.length}:${RAW.per_pg.length}:${PGM ? 1 : 0}`;
+    if (this._stemsKey !== key) {
+      const stems = GROUPS.length ? GROUPS.map((g) => g.stem) : RAW.per_pg.map(([s]) => s);
+      const axis = new Map(stems.map((st) => [st, stemLabel(st).replace(/ \(r .*$/, "")]));
+      this._stems = stems.filter((st) => !isDiag(st)).sort((a, b) =>
+        natural(axis.get(a), axis.get(b))
+        || (STEM_FIRST_RANK.get(a) ?? 0) - (STEM_FIRST_RANK.get(b) ?? 0)
+        || natural(stemLabel(a), stemLabel(b)) || natural(a, b));
+      this._labels = this._stems.map(stemLabel);
+      this._stemsKey = key;
+    }
+    return this._stems;
+  },
+  groupLabels() {
+    this.stems();
+    return this._labels;
+  },
+  init() {
+    const input = document.getElementById("pl-group");
+    // pgmReady() installs the rank labels once the trailing island parses;
+    // until then the options are raw stems, so refresh when it lands.
+    this.picker = typeahead(input, document.getElementById("pl-group-list"),
+      () => {
+        // Only while the labels are still missing: labelsReady() refreshes
+        // the list, which asks for the options again.
+        if (!PGM) pgmReady().then((pgm) => pgm && this.labelsReady());
+        return this.groupLabels();
+      },
+      () => stemLabel(this.stem), (label) => this.load(labelStem(label)));
+    document.getElementById("pl-reset").addEventListener("click", () => { this.domain = null; this.draw(); });
+    document.getElementById("pl-imb-toggle").addEventListener("change", (e) => {
+      document.getElementById("pl-imb").style.display = e.target.checked ? "" : "none";
+      if (e.target.checked) this.renderImbalance();
+    });
+    document.getElementById("pl-straggler-toggle").addEventListener("change", () => this.renderStragglers());
+    document.getElementById("pl-activity-toggle").addEventListener("change", () => this.renderActivity());
+    document.getElementById("pl-pm-toggle").addEventListener("change", () => this.renderPm());
+    const pmCanvas = document.getElementById("pl-pm-canvas");
+    document.getElementById("pl-pm-wrap").addEventListener("scroll", () => this.drawPmTracks());
+    pmCanvas.addEventListener("mousemove", (e) => {
+      const hit = this.pmHit(e.offsetX, e.offsetY);
+      pmCanvas.title = hit ? hit.text : "";
+      pmCanvas.style.cursor = hit && hit.bin ? "pointer" : "";
+    });
+    pmCanvas.addEventListener("click", (e) => {
+      const hit = this.pmHit(e.offsetX, e.offsetY);
+      if (!hit || !hit.bin) return;
+      // Same bucket: max -> min -> rank order; another bucket starts at max.
+      const s = this.pmSort, same = s && s.t >= hit.bin.t0 && s.t < hit.bin.t0 + hit.bin.w;
+      this.pmSort = !same ? { t: hit.t, by: "max" } : s.by === "max" ? { t: s.t, by: "min" } : null;
+      this.renderPmTracks();
+    });
+    const cv = document.getElementById("pl-canvas");
+    const set = (a, b) => { this.domain = a == null ? null : [Math.max(a, 0), b]; this.draw(); };
+    attachZoom(cv, () => this.dom(), set, (px) => { const [x0, x1] = this.dom();
+      return x0 + (px - this.ML) / (cv.clientWidth - this.ML - this.MR) * (x1 - x0); }, 0);
+    keyNav.parallelism = { dom: () => this.dom(), set, min: 0 };
+    this.setDomain = set;
+    cv.addEventListener("mousemove", (e) => {
+      this.hover(e);
+      const pw = cv.clientWidth - this.ML - this.MR, [x0, x1] = this.dom();
+      this.showCursor(e.offsetX < this.ML ? null : x0 + (e.offsetX - this.ML) / pw * (x1 - x0));
+    });
+    cv.addEventListener("mouseleave", () => {
+      this.showCursor(null);
+      document.getElementById("pl-tt").style.display = "none";
+      this.setHoverKey(null);
+    });
+    // The canvas is a sticky window over the row strip: scrolling the wrap
+    // re-renders the rows now in view (rAF-coalesced) instead of paging a
+    // pre-rasterized full-height canvas.
+    let raf = 0;
+    document.getElementById("pl-wrap").addEventListener("scroll", () => {
+      document.getElementById("pl-tt").style.display = "none";
+      this._hoverKey = null;
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; this.draw(); });
+    });
+    addEventListener("resize", () => this.draw());
+    this.loadDiagnostics();
+  },
+  ensure() {
+    const stems = this.stems();
+    if (this.stem || !stems.length) return;
+    // The publisher names the group it chose as the default (the app's
+    // rule: first priority-order group of a size > 1 PG); the fallbacks
+    // cover payloads without it — the inline warm embed, then the first
+    // group whose csv prefix is a valid PG's alias.
+    const aliases = new Set(validPGs.map((k) => PGS[k].alias));
+    const first = (stems.includes(RAW.default_group) && RAW.default_group) ||
+      RAW.per_pg.map(([s]) => s).find((s) => stems.includes(s)) ||
+      stems.find((s) => aliases.has(s.replace(/_\d+$/, ""))) || stems[0];
+    this.load(first);
+    document.getElementById("pl-group").value = stemLabel(first);
+    pgmReady().then((pgm) => pgm && this.labelsReady());
+  },
+  // Group labels (rank lists) arrived: show them in place of raw stems in
+  // the input and in an open picker list.
+  labelsReady() {
+    const input = document.getElementById("pl-group");
+    if (document.activeElement === input) this.picker?.refresh();
+    else if (this.stem) input.value = stemLabel(this.stem);
+  },
+  status(kids) {
+    document.getElementById("pl-status").replaceChildren(...(kids || []));
+  },
+  // Deep link from the calculator's group pills: focus one group in the
+  // timeline. Pinning this.stem before showTab keeps ensure() from racing
+  // a default-group load; load() runs after the tab is visible so the
+  // cached-group path draws against a laid-out canvas.
+  jump(stem) {
+    this.stem = stem;
+    document.getElementById("pl-group").value = stemLabel(stem);
+    showTab("parallelism");
+    this.load(stem);
+  },
+  // The warm-embedded group decodes from the page itself (base64 of its
+  // gzipped member); everything else is a Range request into the data
+  // sidecar next to this page (one gzip member per group, DPG1-columnar
+  // or raw CSV — sniffed by magic). Download progress feeds the top
+  // banner.
+  async fetchEvents(stem) {
+    return eventsFromMember(await this.fetchMember(stem));
+  },
+  async fetchMember(stem, quiet = false) {
+    const warm = RAW.per_pg.find(([s]) => s === stem);
+    if (warm) return gunzipBytes(b64Bytes(warm[1]));
+    const ent = GROUPS.find((g) => g.stem === stem);
+    if (!ent || !RAW.data_name) throw new Error("not embedded and no data sidecar");
+    const lbl = stemLabel(stem);
+    const mb = (n) => (n / 1e6).toFixed(1);
+    const banner = (text, pct) => quiet || this.status([el("div", { class: "loadbox" },
+      el("div", { class: "bar" + (pct == null ? " busy" : ""),
+        style: pct == null ? "" : `width:${pct}%` }), text)]);
+    banner(`Loading ${lbl} (${mb(ent.len)} MB)…`);
+    const bytes = await fetchRange(ent.off, ent.len, (got) =>
+      banner(`Loading ${lbl} — ${mb(got)} / ${mb(ent.len)} MB`, 100 * got / ent.len));
+    banner(`Decoding ${lbl}…`);
+    return gunzipBytes(bytes);
+  },
+  async loadDiagnostics() {
+    if (!GROUPS.some((g) => g.stem === DIAG_STEM) &&
+        !RAW.per_pg.some(([s]) => s === DIAG_STEM)) return;
+    try {
+      const { names, get, nrows } = tableFromMember(await this.fetchMember(DIAG_STEM, true));
+      const col = Object.fromEntries(names.map((h, i) => [h, i]));
+      const activity = [], pm = [];
+      for (let r = 0; r < nrows; r++) {
+        const rank = +get(col.rank, r);
+        if (String(get(col.kind, r)) === "pm") {
+          const row = { rank, metric: String(get(col.metric, r)) };
+          for (const k of PM_STATS) row[k] = +get(col[k], r);
+          pm.push(row);
+        } else {
+          activity.push({ rank, gpu: +get(col.gpu_busy, r), compute: +get(col.compute, r),
+            cpu: +get(col.cpu_active, r), window: +get(col.window, r),
+            gpuStart: col.gpu_start == null ? null : +get(col.gpu_start, r),
+            gpuEnd: col.gpu_end == null ? null : +get(col.gpu_end, r) });
+        }
+      }
+      // First to last GPU event over all analyzed ranks: every group's timeline axis.
+      let gpuSpan = null;
+      for (const a of activity) {
+        if (a.gpuStart == null || !(a.window > 0)) continue;
+        gpuSpan = gpuSpan ? [Math.min(gpuSpan[0], a.gpuStart), Math.max(gpuSpan[1], a.gpuEnd)]
+          : [a.gpuStart, a.gpuEnd];
+      }
+      this.diagnostics = { activity, pm, gpuSpan };
+      if (this.events) { this.setAxis(); this.domain = null; this.draw(); }
+      const metrics = [...new Set(pm.map((r) => r.metric))].sort();
+      this.pmMetric = ["SM Active (%)", ...metrics].find((m) => metrics.includes(m)) ?? null;
+      const box = document.getElementById("pl-pm-metrics");
+      box.textContent = "";
+      for (const metric of metrics) {
+        const input = el("input", { type: "radio", name: "pl-pm-metric",
+          ...(metric === this.pmMetric ? { checked: "" } : {}) });
+        input.addEventListener("change", () => { this.pmMetric = metric; this.renderPm(); });
+        box.append(el("label", { class: "it" }, input, " ", metric));
+      }
+      this.renderDiagnostics();
+    } catch (err) {
+      console.warn("Could not load diagnostics", err);
+    }
+  },
+  async load(stem) {
+    this.stem = stem;
+    if (!this.cache.has(stem)) {
+      let evs;
+      try {
+        evs = await this.fetchEvents(stem);
+      } catch (err) {
+        if (this.stem === stem) this.status([el("div", { class: "warnbox" },
+          `Could not load ${stemLabel(stem)}: ${err.message || err}` +
+          (location.protocol === "file:"
+            ? " — a saved-offline copy can only show the embedded default group." : ""))]);
+        return;
+      }
+      if (this.stem !== stem) return; // user picked another group mid-fetch
+      // Parsed events dominate memory; keep only the most recent groups.
+      if (this.cache.size >= 48) this.cache.delete(this.cache.keys().next().value);
+      this.cache.set(stem, evs);
+    }
+    if (this.stem !== stem) return;
+    this.status();
+    this.build();
+  },
+  build() {
+    this.events = (this.cache.get(this.stem) || []).slice();
+    this._cohorts = null;
+    this._hoverKey = null;
+    this.pmSort = null;
+    this.setAxis();
+    const steps = [...new Set(this.events.map((e) => e.step).filter((x) => x != null))].sort((a, b) => a - b);
+    // Per-step pages name the step in the header; ProfilerStep#N is 0-based there.
+    document.getElementById("pl-steps-row").style.display = steps.length ? "" : "none";
+    document.getElementById("pl-steps").textContent = steps.join(", ");
+    // rows: rank asc, stream asc within rank
+    const byRow = new Map();
+    for (const e of this.events) {
+      const k = e.rank + "\u0000" + e.stream;
+      if (!byRow.has(k)) byRow.set(k, { rank: e.rank, stream: e.stream, evs: [] });
+      byRow.get(k).evs.push(e);
+    }
+    this.rows = [...byRow.values()].sort((a, b) =>
+      a.rank - b.rank || String(a.stream).localeCompare(String(b.stream), undefined, { numeric: true }));
+    for (const r of this.rows) r.evs.sort((a, b) => a.ts - b.ts);
+    // A rank's lanes form a group: g0/g1 = the group's row range (the rank is
+    // labeled once per group), gi = group ordinal (alternate groups are banded).
+    for (let g0 = 0, gi = 0, i = 1; i <= this.rows.length; i++) {
+      if (i === this.rows.length || this.rows[i].rank !== this.rows[g0].rank) {
+        for (let j = g0; j < i; j++) Object.assign(this.rows[j], { g0, g1: i - 1, gi });
+        g0 = i; gi++;
+      }
+    }
+    // Gutter = [rank column][stream column], sized to the widest label of each.
+    const mctx = document.getElementById("pl-canvas").getContext("2d");
+    mctx.font = "9px ui-monospace, monospace";
+    let sw = 0;
+    for (const s of new Set(this.rows.map((r) => String(r.stream))))
+      sw = Math.max(sw, mctx.measureText(`s${s}`).width);
+    this.SW = Math.ceil(Math.min(sw, 60)) + 6;
+    mctx.font = "10px ui-monospace, monospace";
+    this.ML = Math.max(96, Math.ceil(this.rows.length
+      ? mctx.measureText(`Rank ${this.rows[this.rows.length - 1].rank}`).width : 0) + this.SW + 12);
+    // kernel-name colors: first 8 distinct names get slots, the rest are "Other"
+    this.nameSlot.clear();
+    for (const e of this.events)
+      if (!this.nameSlot.has(e.colorName) && this.nameSlot.size < 8)
+        this.nameSlot.set(e.colorName, SLOTS[this.nameSlot.size]);
+    const lg = document.getElementById("pl-legend");
+    lg.textContent = "";
+    for (const [n, slot] of this.nameSlot) lg.append(el("span", { class: "it" },
+      el("span", { class: "sw", style: `background:var(${slot})` }), n));
+    const distinct = new Set(this.events.map((e) => e.colorName)).size;
+    if (distinct > 8) lg.append(el("span", { class: "it" },
+      el("span", { class: "sw", style: `background:var(--other)` }), `Other (${distinct - 8} more names)`));
+    this.domain = null;
+    document.getElementById("pl-wrap").scrollTop = 0;
+    this.draw();
+    if (document.getElementById("pl-imb-toggle").checked) this.renderImbalance();
+    this.renderDiagnostics();
+  },
+  // The axis runs from the analyzed ranks' first to last GPU event, the same for
+  // every group; the group's own events widen it if they fall outside, and set
+  // it alone until the diagnostics have loaded.
+  setAxis() {
+    let lo = Infinity, hi = -Infinity;
+    for (const e of this.events) {
+      if (e.ts < lo) lo = e.ts;
+      if (e.ts + e.dur > hi) hi = e.ts + e.dur;
+    }
+    const span = this.diagnostics && this.diagnostics.gpuSpan;
+    if (span) { lo = Math.min(lo, span[0]); hi = Math.max(hi, span[1]); }
+    if (lo === Infinity) { lo = 0; hi = 1; }
+    this.minT = lo; this.maxT = hi;
+    document.getElementById("pl-t0").textContent = loc(this.minT) + " μs";
+  },
+  dom() { return this.domain || [0, this.maxT - this.minT || 1]; },
+  rowGeom() {
+    const n = this.rows.length || 1;
+    const rowH = Math.max(12, Math.min(46, Math.floor(600 / n)));
+    // The canvas is a fixed window (≤ the wrap's 800px) over a virtual
+    // n*rowH row strip; the spacer div gives the wrap its native scroll
+    // range, so a many-thousand-row group never rasterizes as one giant
+    // canvas (2048 ranks × 2 streams was a ~24,000px, ~0.5GB backing
+    // store that made the whole tab lag).
+    const totalH = n * rowH + this.MB;
+    return { rowH, totalH, H: Math.min(totalH, 800) };
+  },
+  draw() {
+    const cv = document.getElementById("pl-canvas"), wrap = document.getElementById("pl-wrap");
+    if (!wrap.clientWidth || !this.rows.length) return;
+    const n = this.rows.length;
+    const { rowH, totalH, H } = this.rowGeom();
+    document.getElementById("pl-spacer").style.height = totalH + "px";
+    const { ctx, W } = setupCanvas(cv, H);
+    const { ML, MR, MB } = this, PW = W - ML - MR;
+    const [x0, x1] = this.dom(), span = Math.max(x1 - x0, 1e-9);
+    // Rows under the wrap's scroll position; the time axis stays pinned
+    // below the row viewport rather than 24k pixels down.
+    const bodyH = H - MB, scroll = Math.max(0, Math.min(wrap.scrollTop, totalH - H));
+    const first = Math.floor(scroll / rowH);
+    const last = Math.min(n - 1, Math.ceil((scroll + bodyH) / rowH) - 1);
+    ctx.clearRect(0, 0, W, H);
+    document.getElementById("pl-note").textContent = totalH > H
+      ? `${loc(n)} rank/stream rows — scroll the chart vertically for the rest.`
+      : "";
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, W, bodyH); ctx.clip();
+    let lastLabelBot = -Infinity;
+    for (let i = first; i <= last; i++) {
+      const row = this.rows[i], y = i * rowH - scroll;
+      if (row.gi % 2) { ctx.fillStyle = css("--zebra"); ctx.fillRect(0, y, W, rowH); }
+      // stronger full-width separator at rank boundaries, plot-only inside a group
+      const lastOfGroup = i === row.g1;
+      ctx.fillStyle = css(lastOfGroup ? "--axis" : "--grid");
+      ctx.fillRect(lastOfGroup ? 0 : ML, y + rowH - 1, lastOfGroup ? W : PW, 1);
+      // Rank once per group, pinned to its first visible lane (sticky while
+      // the group scrolls, pushed out by its bottom edge); lastLabelBot keeps
+      // sub-label-height groups from overprinting each other.
+      if (i === Math.max(row.g0, first)) {
+        const ty = Math.min(Math.max(y, 0) + Math.min(rowH, 12), (row.g1 + 1) * rowH - scroll - 2);
+        if (ty - 8 > lastLabelBot) {
+          ctx.font = "10px ui-monospace, monospace";
+          ctx.fillStyle = css("--ink-2"); ctx.textAlign = "right";
+          ctx.fillText(`Rank ${row.rank}`, ML - this.SW - 6, ty);
+          lastLabelBot = ty + 2;
+        }
+      }
+      if (rowH >= 9) {
+        ctx.font = "9px ui-monospace, monospace";
+        ctx.fillStyle = css("--ink-3"); ctx.textAlign = "right";
+        ctx.fillText(`s${row.stream}`, ML - 6, y + rowH / 2 + 3);
+      }
+      const barH = Math.min(Math.max(rowH - 2, 3), 22);
+      const yBar = y + (rowH - barH) / 2;
+      for (const e of row.evs) {
+        const a = (e.ts - this.minT - x0) / span * PW, b = (e.ts + e.dur - this.minT - x0) / span * PW;
+        if (b < 0 || a > PW) continue;
+        const matched = this._hoverKey != null && e.cohortKey === this._hoverKey;
+        ctx.globalAlpha = this._hoverKey != null && !matched ? 0.2 : 1;
+        ctx.fillStyle = this.nameSlot.has(e.colorName) ? css(this.nameSlot.get(e.colorName)) : css("--other");
+        const bx = ML + Math.max(a, 0), bw = Math.max(b - Math.max(a, 0), 0.75);
+        ctx.fillRect(bx, yBar, bw, barH);
+        if (matched) {
+          ctx.strokeStyle = css("--ink-1"); ctx.lineWidth = 1.5;
+          ctx.strokeRect(bx - 1, yBar - 1, bw + 2, barH + 2);
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+    ctx.fillStyle = css("--ink-3"); ctx.textAlign = "center"; ctx.font = "11px system-ui";
+    for (const v of niceTicks(span, 8)) {
+      const x = ML + v / span * PW;
+      ctx.fillText(loc(x0 + v), x, H - 24);
+    }
+    ctx.fillText("Time (μs)", ML + PW / 2, H - 6);
+    this._view = { rowH, scroll, bodyH, x0, x1, span, PW };
+    if (this._pm) this.drawPmTracks();
+    this.showCursor(this.cursorT);
+  },
+  setHoverKey(key) {
+    if (this._hoverKey === key) return;
+    this._hoverKey = key;
+    this.draw();
+  },
+  hover(e) {
+    const v = this._view, tt = document.getElementById("pl-tt");
+    if (!v) return;
+    // Canvas y + the scroll the last draw used = position in the row strip.
+    const i = Math.floor((e.offsetY + v.scroll) / v.rowH);
+    const t = v.x0 + (e.offsetX - this.ML) / v.PW * v.span;
+    if (i < 0 || i >= this.rows.length || e.offsetY >= v.bodyH || e.offsetX < this.ML) {
+      tt.style.display = "none"; this.setHoverKey(null); return;
+    }
+    const row = this.rows[i];
+    const halo = 2 / v.PW * v.span; // 2px slop
+    const hit = row.evs.find((ev) =>
+      t >= ev.ts - this.minT - halo && t <= ev.ts + ev.dur - this.minT + halo);
+    if (!hit) { tt.style.display = "none"; this.setHoverKey(null); return; }
+    tt.textContent = "";
+    const r = (n, val) => el("div", { class: "r" }, el("span", { class: "n" }, n),
+      el("span", { class: "v" }, val));
+    tt.append(el("div", { class: "t" }, hit.name),
+      r("Group:", `Rank ${hit.rank}`), r("Stream:", String(hit.stream)),
+      r("Start:", `${loc(hit.ts - this.minT)} μs`),
+      r("End:", `${loc(hit.ts + hit.dur - this.minT)} μs`),
+      r("Duration:", `${loc(hit.dur)} μs`));
+    tt.append(r("Original kernel:", hit.originalName));
+    // The call this event belongs to: a copy-engine collective is several
+    // copies, each only named "Memcpy ...", so say which collective it is.
+    const call = hit.instance ?? hit, nEvents = call.events?.length ?? 1;
+    if (hit.collective) {
+      tt.append(r("Collective:", nEvents > 1
+        ? `${hit.collective} · event ${call.events.indexOf(hit) + 1} of ${nEvents} in this call` : hit.collective));
+      if (nEvents > 1) tt.append(r("Call duration:", `${loc(call.dur)} μs`));
+    }
+    for (const [label, value] of [["Source rank:", hit.src], ["Destination rank:", hit.dst],
+      ["Process group:", hit.pgId], ["Replica:", hit.replica], ["Elements:", hit.nelems],
+      ["Dtype:", hit.dtype], ["Seq:", hit.sequence], ["Graph:", hit.graph], ["Node:", hit.node]])
+      if (value != null) tt.append(r(label, value));
+    // Peer stats for this kernel's cohort: eyeballing the straggler across
+    // a few thousand rows is what the offline analysis was for, so name it
+    // here instead.
+    const c = hit.operation || /SendRecv/i.test(hit.originalName)
+      ? null : this.cohorts().byKey.get(hit.cohortKey);
+    const peers = this.cohortComplete(c);
+    this.setHoverKey(peers ? hit.cohortKey : null);
+    if (peers) {
+      const mine = call.ts - c.ear.ts, spread = c.lat.ts - c.ear.ts;
+      // "· this one" marks the hovered call as the extreme, so the reader
+      // never hunts for a rank they are already looking at.
+      const rk = (inst) => `rank ${inst.rank}` + (inst === call ? " · this one" : "");
+      const hot = (n, val) => el("div", { class: "r" }, el("span", { class: "n" }, n),
+        el("span", { class: "v hot" }, val));
+      tt.append(
+        el("div", { class: "sep" }, `Peers — seq ${c.seq} on ${loc(c.n)} ranks`),
+        r("Start min:", `${loc(c.ear.ts - this.minT)} μs · ${rk(c.ear)}`),
+        r("Start max:", `${loc(c.lat.ts - this.minT)} μs · ${rk(c.lat)}`),
+        hot("Straggler:", `${rk(c.lat)} · +${loc(spread)} μs late`),
+        r("This rank:", mine > 0 ? `+${loc(mine)} μs vs earliest` : "earliest of the cohort"),
+        r("Dur min:", `${loc(c.quick.dur)} μs · ${rk(c.quick)}`),
+        r("Dur max:", `${loc(c.slow.dur)} μs · ${rk(c.slow)}`),
+        r("Imbalance:", c.ear.dur > 0 ? `${(spread / c.ear.dur * 100).toFixed(2)}% of earliest duration` : "—"));
+    }
+    const bytes = this.payload(peers ? c.members : [hit]);
+    if (bytes) {
+      tt.append(r("Payload:", `${loc(bytes)} B`));
+      const kind = peers ? this.bwKind(c) : { alg: true, bus: null };
+      if (kind.alg) {
+        tt.append(r("algbw (this rank):", `${this.bandwidth(bytes, call.dur).toFixed(2)} GB/s · incl. wait`));
+        if (peers) {
+          const alg = this.bandwidth(bytes, c.quick.dur);
+          tt.append(r("algbw (min dur):", `${alg.toFixed(2)} GB/s · rank ${c.quick.rank}`));
+          if (kind.bus != null) tt.append(r("busbw (min dur):", `${(alg * kind.bus).toFixed(2)} GB/s`));
+        }
+      }
+    }
+    tt.append(r("Trace ts:", `${hit.ts.toFixed(3)} μs (raw)`));
+    tt.style.display = "block";
+    placeTip(tt, e);
+  },
+  // See cohortsOf. Built once per group (build() invalidates).
+  cohorts() {
+    return this._cohorts ??= cohortsOf(this.events);
+  },
+  cohortComplete(c) {
+    return cohortComplete(c);
+  },
+  // Bytes per rank from c10d's in/out element counts; 0 when unknown.
+  payload(members) {
+    const sample = members.find((e) => e.inN >= 0 || e.outN >= 0) || members[0];
+    const width = ({ bool: 1, byte: 1, char: 1, uint8: 1, int8: 1, half: 2,
+      float16: 2, bfloat16: 2, short: 2, int16: 2, float: 4, float32: 4,
+      int: 4, int32: 4, long: 8, int64: 8, double: 8, float64: 8 })[(sample.dtype || "").toLowerCase()] || 0;
+    return Math.max(sample.inN, sample.outN, 0) * width;
+  },
+  bandwidth(bytes, durUs) {
+    return durUs > 0 && bytes > 0 ? bytes / durUs / 1000 : 0; // GB/s
+  },
+  // How a cohort's bandwidth is reported, by collective family: `alg` says
+  // whether algbw (full-buffer payload / time, nccl-tests' convention) means
+  // anything, `bus` is the nccl-tests factor turning algbw into busbw (data
+  // over the links per rank), or null. Neither holds where ranks move
+  // different amounts: an all-to-all with uneven splits, or rooted
+  // gather/scatter.
+  bwKind(c) {
+    const name = (c.ear.collective || "").replace(/_/g, "").toLowerCase();
+    const n = c.members.find((m) => m.groupSize > 0)?.groupSize ?? c.n;
+    if (name.includes("allreduce")) return { alg: true, bus: 2 * (n - 1) / n };
+    if (name.includes("allgather") || name.includes("reducescatter")) return { alg: true, bus: (n - 1) / n };
+    if (name.includes("alltoall")) {
+      const even = c.members.every((m) => m.inN >= 0 && m.inN === m.outN && m.inN === c.members[0].inN);
+      return even ? { alg: true, bus: (n - 1) / n } : { alg: false, bus: null };
+    }
+    if (name.includes("gather") || name.includes("scatter")) return { alg: false, bus: null };
+    if (name.includes("broadcast") || name.includes("reduce") || name === "send" || name === "recv")
+      return { alg: true, bus: 1 };
+    return { alg: true, bus: null };
+  },
+  imbalance() {
+    const out = [];
+    for (const c of this.cohorts().list) {
+      if (!this.cohortComplete(c)) continue;
+      const eStart = c.ear.ts - this.minT, lStart = c.lat.ts - this.minT;
+      const duration = c.quick.dur, payload = this.payload(c.members), kind = this.bwKind(c);
+      const bandwidth = kind.alg ? this.bandwidth(payload, duration) : 0;
+      out.push({ seq: c.seq, originalName: c.ear.originalName, name: c.ear.collective || c.ear.name, kernel: c.ear.kernel || c.ear.name,
+        payload, duration, bandwidth, busbw: kind.bus != null ? bandwidth * kind.bus : 0, eStart, eRaw: c.ear.ts,
+        eRank: c.ear.rank, lStart, lRaw: c.lat.ts, lRank: c.lat.rank,
+        diff: c.ear.dur > 0 ? (lStart - eStart) / c.ear.dur * 100 : 0 });
+    }
+    return out;
+  },
+  rankSet() {
+    return new Set(this.events.map((e) => e.rank));
+  },
+  renderDiagnostics() {
+    this.renderStragglers();
+    this.renderActivity();
+    this.renderPm();
+  },
+  renderStragglers() {
+    const control = document.getElementById("pl-straggler-control");
+    const wrap = document.getElementById("pl-stragglers");
+    const box = document.getElementById("pl-straggler-table");
+    if (!this.events) return;
+    const cohorts = this.cohorts().list.filter((c) => this.cohortComplete(c));
+    const available = cohorts.length > 0;
+    control.style.display = available ? "" : "none";
+    wrap.style.display = available && document.getElementById("pl-straggler-toggle").checked ? "" : "none";
+    if (!available || wrap.style.display === "none") return;
+    const stats = new Map();
+    for (const c of cohorts) {
+      const name = c.ear.collective || c.ear.name;
+      const ordered = [...c.members].sort((a, b) => a.ts - b.ts);
+      for (let i = 0; i < ordered.length; i++) {
+        const k = ordered[i].rank + "\u0000" + name;
+        const s = stats.get(k) || { rank: ordered[i].rank, name, eligible: 0, latest: 0, positions: [] };
+        s.eligible++; s.latest += i === ordered.length - 1;
+        s.positions.push(i + 1);
+        stats.set(k, s);
+      }
+    }
+    const percentile = (xs, p) => {
+      const a = [...xs].sort((a, b) => a - b);
+      return a[Math.min(a.length - 1, Math.max(0, Math.ceil(p * a.length) - 1))];
+    };
+    const head = el("tr", {}, el("th", {}, "Rank"), el("th", { style: "text-align:left" }, "Collective"),
+      infoTh("Last arrivals", "Times this rank started last / times it ran this collective"),
+      infoTh("Arrival position (p50 / p90)", "p50 and p90 of this rank's place in the arrival " +
+        "order (1 = started first) among its group's ranks, over its matched runs of this " +
+        "collective, across all groups it runs it on"));
+    const rows = [...stats.values()].sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name))
+      .map((s) => el("tr", {}, el("td", {}, String(s.rank)), el("td", { class: "txt mono" }, s.name),
+        el("td", {}, `${s.latest} / ${s.eligible}`),
+        el("td", {}, [.5, .9].map((p) => percentile(s.positions, p)).join(" / "))));
+    box.replaceChildren(el("p", { class: "note" },
+      "A rank is ‘last’ when it starts a matched collective after every peer in its process group."),
+      el("div", { style: "overflow-x:auto" }, el("table", { class: "data" }, head, rows)));
+  },
+  renderActivity() {
+    const control = document.getElementById("pl-activity-control");
+    const wrap = document.getElementById("pl-activity"), box = document.getElementById("pl-activity-table");
+    if (!this.events || !this.diagnostics) return;
+    const ranks = this.rankSet();
+    const activity = this.diagnostics.activity.filter((r) => ranks.has(r.rank));
+    control.style.display = activity.length ? "" : "none";
+    wrap.style.display = activity.length && document.getElementById("pl-activity-toggle").checked ? "" : "none";
+    if (wrap.style.display === "none") return;
+    const spansByRank = new Map();
+    for (const e of this.events) {
+      if (!ranks.has(e.rank)) continue;
+      if (!spansByRank.has(e.rank)) spansByRank.set(e.rank, []);
+      spansByRank.get(e.rank).push([e.ts, e.ts + e.dur]);
+    }
+    const comm = new Map();
+    for (const [rank, spans] of spansByRank) {
+      spans.sort((a, b) => a[0] - b[0]);
+      let total = 0, end = -Infinity;
+      for (const [a, b] of spans) { if (a > end) total += b - a; else if (b > end) total += b - end; end = Math.max(end, b); }
+      comm.set(rank, total);
+    }
+    const pct = (v, window) => window > 0 ? `${(100 * v / window).toFixed(1)}%` : "—";
+    const head = el("tr", {}, el("th", {}, "Rank"),
+      infoTh("GPU occupied", "% of time any kernel, memcpy or memset is running"),
+      infoTh("Compute kernels", "% of time a non-NCCL, non-memcpy kernel is running"),
+      infoTh("Selected-PG comm", "% of time a collective of the selected group is running, " +
+        "including waiting"),
+      infoTh("CPU active", "% of time any CPU thread is in a PyTorch op or CUDA API call"));
+    const rows = activity.sort((a, b) => a.rank - b.rank)
+      .map((r) => el("tr", {}, el("td", {}, String(r.rank)), el("td", {}, pct(r.gpu, r.window)),
+        el("td", {}, pct(r.compute, r.window)), el("td", {}, pct(comm.get(r.rank) || 0, r.window)),
+        el("td", {}, pct(r.cpu, r.window))));
+    box.replaceChildren(el("div", { style: "overflow-x:auto" }, el("table", { class: "data" }, head, rows)));
+  },
+  renderPm() {
+    const control = document.getElementById("pl-pm-control"), wrap = document.getElementById("pl-pm");
+    if (!this.events || !this.diagnostics) return;
+    const ranks = this.rankSet();
+    const rows = this.diagnostics.pm.filter((r) => ranks.has(r.rank) && r.metric === this.pmMetric)
+      .sort((a, b) => a.rank - b.rank);
+    control.style.display = this.diagnostics.pm.length ? "" : "none";
+    wrap.style.display = this.diagnostics.pm.length && document.getElementById("pl-pm-toggle").checked ? "" : "none";
+    if (wrap.style.display === "none") return;
+    this.renderPmTracks();
+  },
+  // Counter timeline bins of the selected group's ranks, fetched per
+  // PM_BIN_RANKS-rank member on first use: {rank: {metric: [bins]}}.
+  async pmBinsFor(ranks) {
+    const chunks = [...new Set([...ranks].map((r) => Math.floor(r / PM_BIN_RANKS)))];
+    await Promise.all(chunks.filter((c) => !this.pmBins.has(c)).map(async (c) => {
+      const stem = PM_BIN_PREFIX + c;
+      const pending = (async () => {
+        if (!GROUPS.some((g) => g.stem === stem) && !RAW.per_pg.some(([st]) => st === stem)) return new Map();
+        const { names, get, nrows } = tableFromMember(await this.fetchMember(stem, true));
+        const col = Object.fromEntries(names.map((h, i) => [h, i]));
+        const out = new Map();  // rank -> metric -> [{t0, w, min, p1, ...}]
+        for (let r = 0; r < nrows; r++) {
+          const rank = +get(col.rank, r), metric = String(get(col.metric, r));
+          const bin = { t0: +get(col.t0, r), w: +get(col.width, r) };
+          for (const k of PM_BIN_STATS) bin[k] = +get(col[k], r);
+          if (!out.has(rank)) out.set(rank, new Map());
+          const byMetric = out.get(rank);
+          if (!byMetric.has(metric)) byMetric.set(metric, []);
+          byMetric.get(metric).push(bin);
+        }
+        return out;
+      })();
+      this.pmBins.set(c, pending);
+      try { await pending; } catch (err) { this.pmBins.delete(c); throw err; }
+    }));
+    const out = new Map();
+    for (const c of chunks) for (const [rank, m] of await this.pmBins.get(c)) if (ranks.has(rank)) out.set(rank, m);
+    return out;
+  },
+  // Counter tracks: one row per rank, each bucket of the chosen counter drawn
+  // as its min / p50 / max on the timeline's full time range (no zoom).
+  async renderPmTracks() {
+    const wrap = document.getElementById("pl-pm-wrap"), legend = document.getElementById("pl-pm-legend");
+    if (!this.events || document.getElementById("pl-pm").style.display === "none") return;
+    const ranks = this.rankSet(), stem = this.stem, metric = this.pmMetric, sort = this.pmSort;
+    let bins;
+    try { bins = await this.pmBinsFor(ranks); } catch (err) { console.warn("counter timelines", err); return; }
+    if (stem !== this.stem || metric !== this.pmMetric || sort !== this.pmSort) return;  // superseded
+    const series = new Map();
+    for (const r of ranks) {
+      const bs = bins.get(r)?.get(metric);
+      if (bs && bs.length) series.set(r, [...bs].sort((a, b) => a.t0 - b.t0));
+    }
+    if (!series.size) {
+      wrap.style.display = "none"; this._pm = null;
+      legend.textContent = "No samples of this counter on the selected group's ranks.";
+      return;
+    }
+    wrap.style.display = "";
+    // One scale for every rank so tracks compare directly, from 0 (a scale
+    // starting above 0 exaggerates differences) to the largest shown value.
+    let vmin = 0, vmax = 0;
+    for (const bs of series.values()) for (const b of bs) { vmin = Math.min(vmin, b.min); vmax = Math.max(vmax, b.max); }
+    if (!(vmax > vmin)) vmax = vmin + 1;
+    const rankList = [...series.keys()].sort((a, b) => a - b);
+    if (sort) {
+      const key = (r) => {
+        const b = series.get(r).find((b) => sort.t >= b.t0 && sort.t < b.t0 + b.w);
+        return b ? (sort.by === "max" ? -b.max : b.min) : Infinity;
+      };
+      const k = new Map(rankList.map((r) => [r, key(r)]));
+      rankList.sort((a, b) => k.get(a) - k.get(b) || a - b);
+    }
+    this._pm = { rankList, series, metric, vmin, vmax, sort };
+    const sw = (style) => el("span", { style: `display:inline-block;width:14px;height:0;vertical-align:middle;margin:0 3px 0 10px;${style}` });
+    legend.replaceChildren(`${metric}, per bucket:`,
+      sw(`border-top:3px solid ${css("--s1")}`), "p50", sw(`border-top:3px solid ${css("--s4")}`), "max",
+      sw(`border-top:3px solid ${css("--s3")}`), "min",
+      sort ? `  ·  sorted by the ${sort.by} of the bucket at ${loc(sort.t - this.minT)} μs` : "");
+    this.drawPmTracks();
+  },
+  drawPmTracks() {
+    const h = this._pm;
+    if (!h) return;
+    const wrap = document.getElementById("pl-pm-wrap"), cv = document.getElementById("pl-pm-canvas");
+    const rowH = 40, GAP = 6, AX = 30, n = h.rankList.length;
+    document.getElementById("pl-pm-spacer").style.height = n * rowH + AX + "px";
+    // A fixed window over the virtual n*rowH strip, as on the main timeline.
+    const bodyH = Math.min(n * rowH, 600 - AX), H = bodyH + AX;
+    const { ctx, W } = setupCanvas(cv, H);
+    ctx.clearRect(0, 0, W, H);
+    const g = this.plotGeom();
+    const ML = g.width > 0 ? g.left - cv.getBoundingClientRect().left : 210;
+    const PW = g.width > 0 ? g.width : W - ML - 12;
+    const lo = this.minT, span = Math.max(this.maxT - this.minT, 1e-9);
+    const X = (t) => ML + Math.max(0, Math.min(1, (t - lo) / span)) * PW;
+    const scroll = Math.max(0, Math.min(wrap.scrollTop, n * rowH - bodyH));
+    const first = Math.floor(scroll / rowH), last = Math.min(n - 1, Math.floor((scroll + bodyH) / rowH));
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, W, bodyH); ctx.clip();
+    ctx.font = "10px ui-monospace, monospace"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    const band = css("--s1");
+    for (let i = first; i <= last; i++) {
+      const r = h.rankList[i], y = i * rowH - scroll, bs = h.series.get(r);
+      // Each track gets its own shaded box with a gap below it, so a line near
+      // a box's edge still reads as that rank's.
+      const top = y + 1, trackH = rowH - GAP - 2;
+      // 2px inside the box, so a line at 0 or at the top stays visible.
+      const Y = (v) => top + trackH - 2 - (v - h.vmin) / (h.vmax - h.vmin) * (trackH - 4);
+      ctx.fillStyle = css("--ink-3"); ctx.fillText(`rank ${r}`, ML - 6, top + trackH / 2);
+      if (i === first) {
+        // The shared scale, once: its top and bottom beside the first shown row.
+        ctx.save(); ctx.font = "9px ui-monospace, monospace"; ctx.fillStyle = css("--ink-2");
+        ctx.textBaseline = "top"; ctx.fillText(fmtCounter(h.vmax), ML - 6, top);
+        ctx.textBaseline = "bottom"; ctx.fillText(h.vmin === 0 ? "0" : fmtCounter(h.vmin), ML - 6, top + trackH);
+        ctx.restore();
+        ctx.strokeStyle = css("--axis"); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(ML - 2.5, top); ctx.lineTo(ML - 2.5, top + trackH); ctx.stroke();
+      }
+      ctx.fillStyle = css(i % 2 ? "--zebra" : "--grid"); ctx.globalAlpha = 0.5;
+      ctx.fillRect(ML, top, PW, trackH);
+      ctx.globalAlpha = 1;
+      // A bucket holds until the next one: counters sampled less often than a
+      // bucket (power, clocks) are levels that last until their next sample.
+      const until = (j) => (j + 1 < bs.length ? bs[j + 1].t0 : bs[j].t0 + bs[j].w);
+      ctx.globalAlpha = 0.15; ctx.fillStyle = band;
+      bs.forEach((b, j) => ctx.fillRect(X(b.t0), Y(b.max), X(until(j)) - X(b.t0), Y(b.min) - Y(b.max)));
+      ctx.globalAlpha = 1;
+      for (const [k, color, width] of [["min", "--s3", 1], ["max", "--s4", 1], ["p50", "--s1", 2]]) {
+        ctx.strokeStyle = css(color); ctx.lineWidth = width;
+        ctx.beginPath();
+        bs.forEach((b, j) => {
+          const yv = Y(b[k]);
+          if (j === 0) ctx.moveTo(X(b.t0), yv); else ctx.lineTo(X(b.t0), yv);
+          ctx.lineTo(X(until(j)), yv);
+        });
+        ctx.stroke();
+      }
+    }
+    if (h.sort) {
+      ctx.strokeStyle = css("--ink-2"); ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(X(h.sort.t), 0); ctx.lineTo(X(h.sort.t), bodyH); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.restore();
+    ctx.fillStyle = css("--ink-3"); ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"; ctx.font = "11px system-ui";
+    for (const v of niceTicks(span, 8)) ctx.fillText(loc(v), ML + v / span * PW, H - 18);
+    ctx.fillText("Time (μs)", ML + PW / 2, H - 5);
+    this._pmGeom = { ML, PW, lo, span, rowH, scroll, bodyH };
+  },
+  // The rank and bucket under (x, y) on the counter tracks, with hover text.
+  pmHit(x, y) {
+    const h = this._pm, g = this._pmGeom;
+    if (!h || !g || x < g.ML || x > g.ML + g.PW || y > g.bodyH) return null;
+    const rank = h.rankList[Math.floor((y + g.scroll) / g.rowH)];
+    if (rank == null) return null;
+    const t = g.lo + (x - g.ML) / g.PW * g.span;
+    const bin = h.series.get(rank).find((b) => t >= b.t0 && t < b.t0 + b.w);
+    if (!bin) return { t, text: `rank ${rank}: no samples` };
+    return { t, bin, text: `rank ${rank}, ${loc(bin.t0 - this.minT)}–${loc(bin.t0 + bin.w - this.minT)} μs\n` +
+      `min ${fmtCounter(bin.min)}  p50 ${fmtCounter(bin.p50)}  max ${fmtCounter(bin.max)}` };
+  },
+  plotGeom() {
+    const cv = document.getElementById("pl-canvas"), r = cv.getBoundingClientRect();
+    return { left: r.left + cv.clientLeft + this.ML, width: cv.clientWidth - this.ML - this.MR };
+  },
+  // One vertical line at time t (domain-relative) on the main timeline.
+  showCursor(t) {
+    this.cursorT = t;
+    const [x0, x1] = this.dom(), g = this.plotGeom();
+    const place = (cv) => {
+      const wrap = cv.parentElement.closest(".chartwrap");
+      const line = wrap.querySelector(":scope > .tcursor") || wrap.appendChild(el("div", { class: "tcursor" }));
+      const x = g.left + (t - x0) / (x1 - x0) * g.width;
+      if (t == null || x < g.left || x > g.left + g.width) { line.style.display = "none"; return; }
+      const r = cv.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+      line.style.left = x - w.left - wrap.clientLeft + wrap.scrollLeft + "px";
+      line.style.top = r.top - w.top - wrap.clientTop + wrap.scrollTop + "px";
+      line.style.height = r.height + "px";
+      line.style.display = "block";
+    };
+    place(document.getElementById("pl-canvas"));
+  },
+  renderImbalance() {
+    const box = document.getElementById("pl-imb");
+    box.textContent = "";
+    box.append(el("p", { class: "note" },
+      "Kernels are matched by physical process group, step, c10d sequence, and occurrence. " +
+      (this.cohorts().unmatched
+        ? `${loc(this.cohorts().unmatched)} kernels without a sequence number, or p2p, are left out. `
+        : "") +
+      "For each group: the earliest and latest starting rank, and the start " +
+      "spread as a percentage of the earliest kernel's duration."));
+    const rows = this.imbalance();
+    const COLS = [["seq", "Seq"], ["name", "Collective"], ["kernel", "Kernel"],
+      ["payload", "Payload"],
+      ["duration", "Min Duration (μs)", "shortest duration across ranks for this collective"],
+      ["bandwidth", "BW (algbw)"], ["busbw", "BW (busbw)"],
+      ["eStart", "Earliest Start (μs)"], ["eRank", "Earliest Rank"],
+      ["lStart", "Latest Start (μs)"], ["lRank", "Latest Rank"],
+      ["diff", "Difference %", "(latest start - earliest start) / (earliest rank's duration) * 100"]];
+    const s = this.imbSort;
+    rows.sort((a, b) => {
+      const x = a[s.col], y = b[s.col];
+      return (typeof x === "string" ? x.localeCompare(y) : x - y) * s.dir;
+    });
+    const pages = Math.max(1, Math.ceil(rows.length / 100));
+    this.imbPage = Math.min(this.imbPage, pages - 1);
+    const head = el("tr", {}, COLS.map(([c, label, info]) => {
+      const attrs = { onclick: () => {
+        if (s.col === c) s.dir *= -1; else { s.col = c; s.dir = c === "diff" ? -1 : 1; }
+        this.renderImbalance();
+      } };
+      const text = label + (s.col === c ? (s.dir > 0 ? " ▲" : " ▼") : "");
+      return info ? infoTh(text, info, attrs) : el("th", attrs, text);
+    }));
+    const body = rows.slice(this.imbPage * 100, this.imbPage * 100 + 100).map((r) =>
+      el("tr", {}, el("td", {}, String(r.seq)), el("td", { class: "txt mono" }, r.name),
+        el("td", { class: "txt mono", title: r.originalName }, r.kernel),
+        el("td", {}, r.payload ? `${loc(r.payload)} B` : "—"),
+        el("td", {}, loc(r.duration)), el("td", {}, r.bandwidth ? `${r.bandwidth.toFixed(2)} GB/s` : "—"),
+        el("td", {}, r.busbw ? `${r.busbw.toFixed(2)} GB/s` : "—"),
+        el("td", { title: `raw ${r.eRaw.toFixed(3)} μs` }, loc(r.eStart)), el("td", {}, String(r.eRank)),
+        el("td", { title: `raw ${r.lRaw.toFixed(3)} μs` }, loc(r.lStart)), el("td", {}, String(r.lRank)),
+        el("td", { style: "font-weight:700" }, r.diff.toFixed(2) + "%")));
+    box.append(el("div", { style: "overflow-x:auto" }, el("table", { class: "data" }, head, body)));
+    box.append(el("div", { class: "pager" },
+      el("button", { class: "btn", onclick: () => { this.imbPage--; this.renderImbalance(); },
+        ...(this.imbPage === 0 ? { disabled: "" } : {}) }, "Prev"),
+      el("button", { class: "btn", onclick: () => { this.imbPage++; this.renderImbalance(); },
+        ...(this.imbPage >= pages - 1 ? { disabled: "" } : {}) }, "Next"),
+      `${loc(rows.length)} rows total`, `Page ${this.imbPage + 1} / ${pages}`));
+  },
+};
+// --- collected traces -------------------------------------------------------
+const tr = {
+  expanded: new Set(), shown: 100, filter: null,
+  init() {
+    document.getElementById("tr-count").textContent = this.count();
+    const q = document.getElementById("tr-q");
+    let t = null;
+    const apply = async () => {
+      const val = q.value.trim();
+      this.filter = await pgQuery(val);
+      if (val !== q.value.trim()) return; // input moved on mid-query
+      this.shown = 100; this.render();
+    };
+    q.addEventListener("focus", () => pgmReady()); // warm the rank lists pre-keystroke
+    q.addEventListener("input", () => {
+      clearTimeout(t);
+      // Clearing snaps back instantly; only real queries are debounced.
+      if (!q.value.trim()) { this.filter = null; this.shown = 100; this.render(); return; }
+      t = setTimeout(apply, 120);
+    });
+    document.getElementById("tr-expand").addEventListener("click", () => {
+      const all = this.expanded.size < HOSTS.length;
+      this.expanded = all ? new Set(HOSTS.map((h) => h.host)) : new Set();
+      document.getElementById("tr-expand").textContent = all ? "Collapse all" : "Expand all";
+      this.render();
+    });
+    this.render();
+  },
+  count() {
+    const ranks = `${loc(RANKMAP.length)} ranks`;
+    return HOSTS.some((h) => h.host) ? `${loc(HOSTS.length)} hosts · ${ranks}` : ranks;
+  },
+  render() {
+    const grid = document.getElementById("tr-hosts");
+    grid.textContent = "";
+    if (!RANKMAP.length) {
+      grid.append(el("div", { class: "note" },
+        "No rank map in this run."));
+      return;
+    }
+    const match = this.filter && (this.filter.ranks.size || this.filter.hosts.size) ? this.filter : null;
+    let hosts = HOSTS.map((h, i) => ({ ...h, idx: i }));
+    if (match) hosts = hosts.filter((h) => h.ranks.some((r) => match.ranks.has(r.rank)));
+    document.getElementById("tr-count").textContent = match
+      ? `${loc(hosts.length)} of ${loc(HOSTS.length)} hosts · ${loc(match.ranks.size)} ranks match`
+      : this.filter ? `no matches · showing all ${loc(HOSTS.length)} hosts`
+      : this.count();
+    const visible = hosts.slice(0, this.shown);
+    for (const h of visible) {
+      const done = h.ranks.filter((r) => analyzed(r.rank)).length;
+      const isOpen = match || this.expanded.has(h.host);
+      const digits = String(Math.max(...h.ranks.map((r) => r.rank))).length;
+      const cols = digits >= 5 ? 4 : digits >= 4 ? 6 : 8;
+      const body = el("div", { class: "ranks",
+        style: `grid-template-columns:repeat(${Math.min(h.ranks.length, cols)},minmax(${digits * 7 + 10}px,1fr))` });
+      if (isOpen) for (const r of h.ranks) {
+        const hit = match && match.ranks.has(r.rank);
+        const title = `Rank ${r.rank} on ${h.host || "unknown host"}` + (r.file ? `\n${r.file}` : "");
+        body.append(el("span", {
+          class: "rk" + (analyzed(r.rank) ? "" : " off") + (hit ? " hit" : ""), title,
+          onclick: () => pgCalcSet(String(r.rank)),
+        }, String(r.rank)));
+      }
+      const card = el("div", { class: "host" },
+        el("div", { class: "hh", onclick: () => {
+          this.expanded.has(h.host) ? this.expanded.delete(h.host) : this.expanded.add(h.host);
+          this.render();
+        } },
+          el("span", {}, isOpen ? "▾" : "▸"),
+          el("span", { class: "tbadge" }, `Host ${h.idx}`),
+          el("span", { class: "name mono" }, h.host || "(no host data)"),
+          h.host ? copyIcon(h.host, "hostname") : null,
+          el("span", { class: "cnt" + (done === h.ranks.length ? " full" : "") },
+            `${done}/${h.ranks.length}`)),
+        isOpen ? body : null);
+      grid.append(card);
+    }
+    const more = document.getElementById("tr-more");
+    more.textContent = "";
+    if (hosts.length > this.shown) more.append(
+      el("button", { class: "btn", onclick: () => { this.shown += 200; this.render(); } },
+        `Show more (${visible.length} of ${loc(hosts.length)})`));
+  },
+};
+// --- metadata tab -------------------------------------------------------------
+function renderMetadata() {
+  const paths = document.getElementById("md-paths");
+  const kv = (box, k, v) => box.append(el("div", { class: "kv" },
+    el("span", { class: "k" }, k), copySpan(v, "v mono")));
+  const wsPath = (md && (md.trace_prefix || mdConfig.trace_folder_path)) || cfg.trace_root || "—";
+  kv(paths, "Source:", wsPath);
+  kv(paths, "Repaired traces:", RAW.repaired_traces_dir || "N/A");
+  // The trace format, then the run environment the traces record (each
+  // field only when some trace has it).
+  const cfgBox = document.getElementById("md-cfg");
+  if (cfg.trace_format) kv(cfgBox, "trace format:", cfg.trace_format);
+  const ENV_LABELS = { gpu: "GPU", cuda_driver: "CUDA driver", cuda_runtime: "CUDA runtime",
+    cupti: "CUPTI", nccl: "NCCL", backend: "backend", process_groups: "process groups",
+    profiler_options: "profiler options" };
+  for (const { key, values } of (md && md.environment) || []) {
+    kv(cfgBox, (ENV_LABELS[key] || key) + ":", values.length === 1 ? values[0].value
+      : values.map((v) => `${v.value} (ranks ${v.ranks})`).join("; "));
+  }
+  const eng = cfg.engine || {};
+  kv(document.getElementById("md-engine"), "comms_viz:",
+    `${eng.version || "—"}, rev ${eng.rev || "—"}`);
+}
+// --- side nav ------------------------------------------------------------
+// The left rail contains the run's metadata and process-group sections.
+// Collapse state persists in localStorage.
+function initSideNav() {
+  const shell = document.getElementById("shell");
+  const nav = document.getElementById("sidenav");
+  const btn = document.getElementById("sn-toggle");
+  const setCollapsed = (off) => {
+    shell.classList.toggle("snav-off", off);
+    btn.textContent = off ? "»" : "«";
+    btn.title = off ? "Expand sidebar" : "Collapse sidebar";
+    if (off) nav.title = "Expand sidebar"; else nav.removeAttribute("title");
+    try { localStorage.setItem("comms_viz-sidebar", off ? "collapsed" : "open"); } catch (e) {}
+    redrawAll(); // the main column just changed width
+  };
+  btn.addEventListener("click", () => setCollapsed(!shell.classList.contains("snav-off")));
+  snavExpand = () => { if (shell.classList.contains("snav-off")) setCollapsed(false); };
+  // Clicking anywhere on a collapsed rail expands it. The toggle's own
+  // listener runs first (target before ancestor), so its expansion makes
+  // this a no-op rather than a double toggle.
+  nav.addEventListener("click", () => {
+    if (!shell.classList.contains("snav-off")) return;
+    setCollapsed(false);
+  });
+  let saved = null;
+  try { saved = localStorage.getItem("comms_viz-sidebar"); } catch (e) {}
+  if (saved === "collapsed") setCollapsed(true);
+}
+function redrawAll() { bd.draw(); pl.draw(); }
+// --- boot ---------------------------------------------------------------------
+// Everything visible renders synchronously from the critical island — no
+// awaits before first paint, and nothing on the paint path scales with
+// world size. Artifacts that live in the sidecar stream in behind the
+// paint (one coalesced Range request for all of them) and upgrade their
+// surfaces as they land.
+(function boot() {
+  document.title = (jobName ? jobName + " — " : "") + "comms_viz report " + RAW.run_id.slice(0, 8);
+  initCopy();
+  renderHeader();
+  renderPgSearch();
+  pl.init();
+  renderMetadata();
+  renderTabs();
+  initSideNav();
+  document.getElementById("footer").textContent =
+    `Generated ${new Date(RAW.generated_at_s * 1000).toLocaleString()} by comms_viz` +
+    (cfg.engine ? ` (engine ${cfg.engine.name} ${cfg.engine.version || ""} rev ${cfg.engine.rev || "?"})` : "") +
+    ` · this is a self-contained static analysis report.`;
+  const offlineNote = (what) => location.protocol === "file:"
+    ? `Saved-offline copy — ${what} is unavailable without the data sidecar.`
+    : `Could not load ${what} from the data sidecar.`;
+  // Breakdown: the inline preview paints immediately; the exact CSV swaps
+  // in when it arrives. Inline breakdowns skip straight to the full init.
+  if (RAW.bd_preview) decodeEnc(RAW.bd_preview.csv).then((csv) => {
+    if (!bd.full) { bd.init(csv, RAW.bd_preview.cats, true); bd.draw(); }
+  });
+  artifactText("breakdown").then((csv) => {
+    if (csv == null) return;
+    if (bd.wired) bd.upgrade(csv);
+    else { bd.init(csv); bd.draw(); }
+    ANALYZED = new Set(bd.ranks);
+    tr.render();
+  }).catch(() => bd.note(offlineNote("the full-resolution breakdown")));
+  // The rank map: the compact encoding (host_map::rank_map_payload) --
+  // contiguous rank runs share a host index and a trace-name suffix entry.
+  artifactText("rank_map").catch(() => null).then((rmText) => {
+    if (rmText) {
+      const rm = JSON.parse(rmText);
+      const pad = (r) => String(r).padStart(6, "0");
+      const bkt = (r) => {
+        let out = "", at = 0;
+        for (const c of rm.bkt || []) { out += pad(r).slice(at, c) + "/"; at = c; }
+        return out;
+      };
+      let ti = 0;
+      const file = (r, e) =>
+        typeof e === "string" ? bkt(r) + pad(r) + e
+        : e && e[0] === "rank_" ? "rank_" + r + e[1]
+        : e && e[0] === "#" ? bkt(r) + pad(r) + e[1] + (BigInt(e[3]) + BigInt(rm.tok[ti++])) + e[2]
+        : (rm.x || {})[r] || "";
+      for (const [start, len, h, s] of rm.runs || []) {
+        for (let r = start; r < start + len; r++) {
+          RANKMAP.push({ rank: r, host: h < 0 ? "" : rm.hosts[h], file: file(r, rm.sfx[s]) });
+        }
+      }
+    }
+    buildHosts();
+    tr.init();
+  });
+  // Decode the pg_map island (rank lists) while idle, off the paint
+  // path, so the PG calculator answers instantly when first used. Group
+  // labels come from the island too, so an input filled before it parsed
+  // still shows the raw stem until now.
+  // The timeout keeps a busy page (large runs) from postponing it for long.
+  (window.requestIdleCallback || setTimeout)(() => pgmReady().then((pgm) => pgm && pl.labelsReady()),
+    { timeout: 1000 });
+})();
+</script>
+<script id="comms_viz-pgmap" type="application/json">__COMMS_VIZ_PGMAP__</script>
+</body>
+</html>
