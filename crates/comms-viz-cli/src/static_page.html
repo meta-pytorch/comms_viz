@@ -694,12 +694,6 @@ document.getElementById("run-warnings").replaceChildren(
   ...(RAW.warnings || []).map((w) => el("div", { class: "warnbox" }, "Warning: " + w)));
 const totalGpus = (md && (md.world_size ?? mdConfig.world_size)) ?? run.total_ranks ?? 0;
 const jobName = run.run_name || mdConfig.run_name || "";
-// The analyzed training step, inferred from the trace path when present.
-const pageStep = (() => {
-  const m = String((md && (md.trace_prefix || mdConfig.trace_folder_path)) ||
-    cfg.trace_root || "").match(/(?:^|\/)(?:step|iteration)_(\d+)\/?$/);
-  return m ? parseInt(m[1], 10) : null;
-})();
 // --- PG util ---------------------------------------------------------------
 // First paint uses only the publisher's summary (alias/count/size per
 // PG); the rank lists live in the #comms_viz-pgmap island at the end of the
@@ -984,7 +978,6 @@ function renderHeader() {
   rows.append(el("div", { class: "kv" },
     el("span", { class: "k" }, "Run ID:"), copySpan(RAW.run_id, "v mono")));
   if (jobName) kv("Run:", jobName, true);
-  if (pageStep != null) kv("Step:", String(pageStep), true);
   kv("Configured ranks:", loc(ranksP.total ?? run.total_ranks ?? 0), true);
   kv("Ranks processed:", loc(ranksP.processed ?? 0), true);
   kv("Started:", fmtMicros(run.started_at));
@@ -1011,39 +1004,16 @@ function renderHeader() {
 // --- PG calculator -----------------------------------------------------------
 // Rebound at boot (renderPgSearch / initSideNav); rank clicks land here.
 let pgCalcSet = () => {}, snavExpand = () => {};
-// A group term: a group key, then a number (`tp1`, `tp_1`), or the key
-// alone when it has one group. The key matches case-insensitively and the
-// longest matching key wins, so keys with upper case or digits
-// (TENSOR_MODEL_PARALLEL_GROUP, pp_p2p_round_0) resolve. The number counts
-// the key's groups by lowest rank, as the structured report's aliases do.
-// All-digit terms are ranks, never group terms (some keys are numbers).
-function pgTerm(PG, term) {
-  if (/^\d+$/.test(term)) return null;
-  const t = term.toLowerCase();
-  let best = null;
-  for (const [key, p] of Object.entries(PG)) {
-    const k = key.toLowerCase();
-    if (!t.startsWith(k) || (best && k.length <= best.key.length)) continue;
-    const rest = t.slice(k.length).replace(/^_/, "");
-    if (/^\d+$/.test(rest)) best = { key, n: +rest };
-    else if (rest === "" && p.groups.length === 1) best = { key, n: 0 };
-  }
-  if (!best) return null;
-  const groups = PG[best.key].groups;
-  const low = groups.map((ranks) => ranks.reduce((m, r) => Math.min(m, r), Infinity));
-  const byLowestRank = groups.map((_, i) => i).sort((a, b) => low[a] - low[b] || a - b);
-  return { ...best, index: byLowestRank[best.n], count: groups.length };
-}
 async function pgQuery(q) {
   const { PG, rankToGroups } = (await pgmReady()) || { PG: {}, rankToGroups: {} };
   const out = { ranks: new Set(), hosts: new Set(), notes: [], groups: [] };
   for (let term of q.split(",").map((t) => t.trim()).filter(Boolean)) {
-    const g = pgTerm(PG, term);
-    if (g) {
-      const p = PG[g.key], gid = g.index;
-      if (g.n >= g.count) { out.notes.push(`${g.key}: valid ids 0–${g.count - 1}`); continue; }
+    const m = term.toLowerCase().match(/^([a-z_+]+)(\d+)$/);
+    if (m && PG[m[1]]) {
+      const gid = +m[2], p = PG[m[1]];
+      if (gid >= p.groups.length) { out.notes.push(`${m[1]}: valid ids 0–${p.groups.length - 1}`); continue; }
       p.groups[gid].forEach((r) => out.ranks.add(r));
-      out.groups.push({ pg: g.key, gid, stem: groupStem(PG, g.key, p.ids[gid] ?? String(gid)) });
+      out.groups.push({ pg: m[1], gid, stem: groupStem(PG, m[1], p.ids[gid] ?? String(gid)) });
     } else if (/^\d+$/.test(term)) {
       const r = +term;
       if (rankToGroups[r]) { out.ranks.add(r);

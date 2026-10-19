@@ -962,16 +962,14 @@ fn build_summary(
             .total_cmp(&lost_share(a))
             .then(a.rank.cmp(&b.rank))
     });
-    // The ProfilerSteps the capture covers, from the ranks' step markers;
-    // else the trace directory name (step_N).
+    // The ProfilerSteps the capture covers, from the ranks' step markers.
     let step_ranges: BTreeSet<(i64, i64)> = diag.activity.iter().filter_map(|a| a.steps).collect();
     let steps_text = match step_ranges.len() {
-        0 => data
-            .metadata_json
-            .as_ref()
-            .and_then(|m| m["capture"]["step"].as_i64())
-            .map_or("step unknown".to_string(), |s| format!("step {s}")),
-        1 => crate::diagnostics::step_label(*step_ranges.iter().next().expect("one range")),
+        0 => "step unknown".to_string(),
+        1 => format!(
+            "Profiler {}",
+            crate::diagnostics::step_label(*step_ranges.iter().next().expect("one range"))
+        ),
         _ => "different steps per rank (see warnings)".to_string(),
     };
     let unmatched_dist = {
