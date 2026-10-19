@@ -1382,6 +1382,7 @@ fn build_meta(cfg: &RunConfig, world_size: i64, w_count: i64) -> RunMeta {
             ("engine".into(), crate::emit::engine_stamp()),
             ("trace_format".into(), cfg.trace_format.as_str().into()),
         ],
+        verbose: cfg.verbose,
     }
 }
 

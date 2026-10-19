@@ -68,6 +68,8 @@ pub struct RunMeta {
     pub worker_count: i64,
     /// Extra run-config entries to embed in config.json.
     pub config_extra: Vec<(String, Value)>,
+    /// Print one line per process group while writing (thousands at scale).
+    pub verbose: bool,
 }
 
 impl RunMeta {
@@ -783,10 +785,12 @@ fn aggregate_decoded(
                 false,
             );
             let t_members = t.elapsed().as_secs_f64();
-            eprintln!(
-                "emit:   pg {pg_key}: rows={rows} concat={t_concat:.2}s \
-                 parquet={t_parquet:.2}s group-members={t_members:.2}s"
-            );
+            if meta.verbose {
+                eprintln!(
+                    "emit:   pg {pg_key}: rows={rows} concat={t_concat:.2}s \
+                     parquet={t_parquet:.2}s group-members={t_members:.2}s"
+                );
+            }
             Ok(Some(pg_key.clone()))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1695,6 +1699,7 @@ mod tests {
             completed_at_us: 2,
             worker_count: 1,
             config_extra: vec![],
+            verbose: false,
         }
     }
 
@@ -1721,6 +1726,7 @@ mod tests {
             completed_at_us: 1_700_000_001_500_000,
             worker_count: 1,
             config_extra: Vec::new(),
+            verbose: false,
         }
     }
 

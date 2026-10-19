@@ -311,12 +311,12 @@ fn analyze(args: &Args, trace_root: PathBuf, run_id: &str) -> Result<usize> {
 
     let summary = run(&cfg)?;
     eprintln!(
-        "comms_viz: world_size={} processed={} skipped={} errors={} pgs=[{}] wall={:.2}s",
+        "comms_viz: world_size={} processed={} skipped={} errors={} pgs={} wall={:.2}s",
         summary.world_size,
         summary.processed,
         summary.skipped,
         summary.errors,
-        summary.pg_keys.join(","),
+        summary.pg_keys.len(),
         t0.elapsed().as_secs_f64(),
     );
     // Capped: jobs with generator/reward ranks legitimately skip most of a large world.

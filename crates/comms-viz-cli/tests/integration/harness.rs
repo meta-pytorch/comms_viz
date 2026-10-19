@@ -201,7 +201,7 @@ pub fn analyze_default(fx: &Fixture, out_dir: &Path, home: &Path, extra: &[&str]
 }
 
 /// The final direct-mode stderr summary, e.g.
-/// `comms_viz: world_size=8 processed=8 skipped=0 errors=0 pgs=[…] wall=1.2s`
+/// `comms_viz: world_size=8 processed=8 skipped=0 errors=0 pgs=6 wall=1.2s`
 /// with the volatile wall time stripped.
 pub fn run_summary(out: &Output) -> String {
     let err = stderr_str(out);
