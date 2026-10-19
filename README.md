@@ -62,6 +62,10 @@ cargo build --release --locked
   to be properly emitted.
 - `.pftrace` traces come from PyTorch's Cuspy profiler backend, currently only in nightlies,
   but likely to be released in PyTorch 2.15.
+- Matching collectives across ranks needs PyTorch 2.12 or later, which records each collective
+  kernel's c10d sequence number.
+- Collective metadata on CUDA-graph replays and in `.pftrace` (Cuspy) traces needs a nightly
+  from 2026-10-16 or later.
 
 ## Collective annotations
 
