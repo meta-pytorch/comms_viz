@@ -103,3 +103,7 @@ comms_viz is an entirely AI-written codebase, with human direction over its
 features, metrics and visualizations, and human use on real large-scale
 training analysis. Most of the code has had little or no line-by-line human
 review.
+
+## License
+
+comms_viz is BSD 3-Clause licensed, as found in the [LICENSE](LICENSE) file.
